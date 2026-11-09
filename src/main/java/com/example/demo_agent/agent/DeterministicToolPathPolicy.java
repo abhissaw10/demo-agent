@@ -124,6 +124,32 @@ public final class DeterministicToolPathPolicy {
 		});
 	}
 
+	public Optional<AgentDecision> earlyDecision(String message, List<ConversationTurn> history,
+			List<ExecutedToolCall> observed) {
+		Optional<ExpectedToolPath> expected = expectedPath(message, history);
+		if (expected.isEmpty()) {
+			return Optional.empty();
+		}
+		if (hasNoOrders(observed)) {
+			return Optional.of(new AgentDecision(
+					"No orders were found for this customer.", "ANSWERED",
+					List.of(intentName(expected.get().useCase())), null,
+					List.of("The customer order lookup found no orders."),
+					List.of(), List.of()));
+		}
+		if (isRefundOrExchange(expected.get().useCase()) && hasOnlyFulfilledOrders(observed)) {
+			String orderId = singleOwnedOrderId(observed).orElse(null);
+			String subject = orderId == null ? "Every owned order" : orderId;
+			return Optional.of(new AgentDecision(
+					subject + " is already delivered, so no unfulfilled order requires a "
+							+ policyName(expected.get().useCase()) + " policy check.",
+					"ANSWERED", List.of(intentName(expected.get().useCase())), orderId,
+					List.of("The customer order lookup shows that every owned order is delivered."),
+					List.of(), List.of()));
+		}
+		return Optional.empty();
+	}
+
 	private List<String> requiredPath(ExpectedToolPath path, List<ExecutedToolCall> observed) {
 		if (hasNoOrders(observed)
 				|| (isRefundOrExchange(path.useCase()) && hasOnlyFulfilledOrders(observed))) {
@@ -172,6 +198,29 @@ public final class DeterministicToolPathPolicy {
 
 	private boolean isRefundOrExchange(String useCase) {
 		return useCase.startsWith("REFUND_") || useCase.startsWith("EXCHANGE_");
+	}
+
+	private String policyName(String useCase) {
+		return useCase.startsWith("REFUND_") ? "refund" : "exchange";
+	}
+
+	private String intentName(String useCase) {
+		return switch (useCase) {
+			case "LIST_ORDERS" -> "list orders";
+			case "DELIVERY_STATUS" -> "delivery status";
+			default -> policyName(useCase) + " eligibility";
+		};
+	}
+
+	private Optional<String> singleOwnedOrderId(List<ExecutedToolCall> observed) {
+		return observed.stream()
+				.filter(call -> GetCustomerOrdersTool.NAME.equals(call.name()) && call.success())
+				.map(ExecutedToolCall::output)
+				.filter(List.class::isInstance)
+				.map(value -> (List<?>) value)
+				.filter(orders -> orders.size() == 1 && orders.getFirst() instanceof CustomerOrderResponse)
+				.map(orders -> ((CustomerOrderResponse) orders.getFirst()).orderId())
+				.findFirst();
 	}
 
 	private boolean mentions(String text, String... terms) {

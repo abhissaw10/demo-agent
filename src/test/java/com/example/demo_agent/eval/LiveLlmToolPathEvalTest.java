@@ -80,19 +80,19 @@ class LiveLlmToolPathEvalTest {
 
 	@Test
 	void eval05_noOrdersStopsAfterCustomerOrders() {
-		assertPath(run("eval-no-orders", "CUST-404", "Where is ORD-404?"), 2,
+		assertPath(run("eval-no-orders", "CUST-404", "Where is ORD-404?"), 1,
 				GetCustomerOrdersTool.NAME);
 	}
 
 	@Test
 	void eval06_noUnfulfilledOrdersPreventsRefundTools() {
-		assertPath(run("eval-no-refund", "CUST-1004", "Can I get a refund for ORD-1006?"), 2,
+		assertPath(run("eval-no-refund", "CUST-1004", "Can I get a refund for ORD-1006?"), 1,
 				GetCustomerOrdersTool.NAME);
 	}
 
 	@Test
 	void eval07_noUnfulfilledOrdersPreventsExchangeTools() {
-		assertPath(run("eval-no-exchange", "CUST-1004", "Can I exchange ORD-1006?"), 2,
+		assertPath(run("eval-no-exchange", "CUST-1004", "Can I exchange ORD-1006?"), 1,
 				GetCustomerOrdersTool.NAME);
 	}
 

@@ -283,7 +283,8 @@ class SupportAgentServiceTest {
 		ChatResponse response = service(factory, executor)
 				.chat(new ChatRequest("Where is ORD-404?", "CUST-404"), "session-1");
 
-		assertThat(response.outcome()).isEqualTo("CLARIFICATION_REQUIRED");
+		assertThat(response.outcome()).isEqualTo("ANSWERED");
+		assertThat(response.llmCalls()).isEqualTo(1);
 		assertThat(response.toolCalls()).isEqualTo(1);
 		verify(executor, times(1)).execute(any(), any());
 	}
@@ -309,7 +310,8 @@ class SupportAgentServiceTest {
 		ChatResponse response = service(factory, executor)
 				.chat(new ChatRequest("What is the refund policy?", "CUST-1001"), "session-1");
 
-		assertThat(response.outcome()).isEqualTo("CLARIFICATION_REQUIRED");
+		assertThat(response.outcome()).isEqualTo("ANSWERED");
+		assertThat(response.llmCalls()).isEqualTo(1);
 		assertThat(response.toolCalls()).isEqualTo(1);
 		verify(executor, times(1)).execute(any(), any());
 	}

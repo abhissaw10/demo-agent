@@ -158,6 +158,16 @@ public class SupportAgentService {
 						}
 					}
 				}
+				java.util.Optional<AgentDecision> earlyDecision =
+						toolPathPolicy.earlyDecision(message, history, observedEvidence);
+				if (earlyDecision.isPresent()) {
+					AgentDecision decision = earlyDecision.get();
+					memoryStore.add(context.sessionId(), customerId,
+							new ConversationTurn(message, decision.message(), observedEvidence));
+					log.info("Deterministic early decision accepted outcome={} llmCalls={} toolCalls={}",
+							decision.outcome(), llmCalls, toolCalls);
+					return ChatResponse.from(decision, llmCalls, toolCalls);
+				}
 				session.submitToolResults(results);
 				continue;
 			}
