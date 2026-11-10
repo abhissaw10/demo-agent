@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 
 @Configuration
-@EnableConfigurationProperties(SupportAgentProperties.class)
+@EnableConfigurationProperties({SupportAgentProperties.class, RuntimeEvalProperties.class})
 public class SupportAgentConfiguration {
 
 	@Bean

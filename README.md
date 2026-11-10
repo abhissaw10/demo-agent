@@ -48,7 +48,58 @@ RUN_LIVE_EVALS=true GROQ_API_KEY=your-key ./mvnw \
 
 Set `LIVE_EVAL_PORT` if port `18080` is unavailable. The ten live evals assert tool order,
 forbidden tools, exact LLM/tool counts, duplicate calls, context reuse, and trace/span/session
-correlation. They deliberately do not grade the customer-facing response text.
+correlation. A separate evaluator-LLM suite grades ten representative customer-facing answers for
+correctness, grounding in tool evidence, helpfulness, and unsupported action claims:
+
+```bash
+RUN_LIVE_EVALS=true GROQ_API_KEY=your-key ./mvnw \
+  -Dtest=LlmResponseGradingEvalTest test
+```
+
+Each response-grading case sends a real HTTP request to the running `/chat` endpoint. The support
+agent calls the configured live LLM and the application’s real order and policy endpoints; no
+`OpenAIClient`, `LlmSession`, chat response, or tool result is mocked. A second live LLM call grades
+the answer and verified evidence returned by that traffic. The judge checks factual grounding,
+directness, clarity, intent coverage, tone, misleading promises, and necessary clarification.
+
+Both live suites cap the support agent at four LLM iterations and disable SDK retries. The evaluator
+also has an explicit four-iteration ceiling, used only to recover from malformed grading JSON. Thus
+neither the answering agent nor the judge can loop indefinitely, and both remain below five logical
+iterations per case.
+
+During a live run, the suite writes each result immediately to:
+
+- `target/eval-reports/llm-response-grading.json` for CI ingestion and historical storage
+- `target/eval-reports/llm-response-grading.html` for a local dashboard
+
+Open the HTML file in a browser while the eval is running. It refreshes every two seconds, shows the
+agent and evaluator call counts, and marks failed cases red and evaluator errors orange. Both files
+are rewritten atomically after every case and once more at suite completion, so an interrupted run
+still retains all completed results. Since `target/` is ignored by Git, copy the JSON and HTML files
+into CI artifacts when reports need to be retained across builds.
+
+### Continuous runtime evaluation
+
+For production-style evaluation of ordinary `/chat` traffic, enable the asynchronous runtime
+evaluator when starting the application:
+
+```bash
+RUNTIME_EVAL_ENABLED=true RUNTIME_EVAL_SAMPLE_RATE=1.0 GROQ_API_KEY=your-key \
+  ./mvnw spring-boot:run
+```
+
+Then use the application normally and open `http://localhost:8080/eval-dashboard`. Every completed
+chat request is eligible for background grading, and the dashboard polls for new results every two
+seconds. `RUNTIME_EVAL_SAMPLE_RATE` accepts a value from `0.0` to `1.0`; use a lower value such as
+`0.05` to grade approximately five percent of requests at higher volumes.
+
+Runtime grading never blocks the customer response. It uses two background workers, a bounded queue
+of 100 evaluations, a maximum of four evaluator iterations, and retains the latest 200 results.
+When the queue is full, new evaluations are dropped rather than increasing request latency or memory
+without bound. The current snapshot is also persisted atomically to
+`target/runtime-eval/runtime-eval-results.json`. The dashboard exposes customer questions and agent
+answers, so in a real deployment these endpoints must be placed behind internal authentication and
+the stored data must follow the organization’s retention and redaction requirements.
 
 ## API
 

@@ -2,7 +2,10 @@ package com.example.demo_agent.agent;
 
 import com.example.demo_agent.api.ChatRequest;
 import com.example.demo_agent.api.ChatResponse;
+import com.example.demo_agent.api.CustomerOrderResponse;
 import com.example.demo_agent.config.SupportAgentProperties;
+import com.example.demo_agent.tool.GetCustomerOrdersTool;
+import com.example.demo_agent.tool.GetDeliveryStatusTool;
 import com.example.demo_agent.tool.ToolExecutionContext;
 import com.example.demo_agent.tracing.AgentEventPublisher;
 import com.example.demo_agent.tracing.AgentRunCompletedEvent;
@@ -161,7 +164,7 @@ public class SupportAgentService {
 				java.util.Optional<AgentDecision> earlyDecision =
 						toolPathPolicy.earlyDecision(message, history, observedEvidence);
 				if (earlyDecision.isPresent()) {
-					AgentDecision decision = earlyDecision.get();
+					AgentDecision decision = withVerifiedToolEvidence(earlyDecision.get(), observedEvidence);
 					memoryStore.add(context.sessionId(), customerId,
 							new ConversationTurn(message, decision.message(), observedEvidence));
 					log.info("Deterministic early decision accepted outcome={} llmCalls={} toolCalls={}",
@@ -174,8 +177,9 @@ public class SupportAgentService {
 
 			try {
 				toolPathPolicy.validateComplete(message, history, observedEvidence);
-				AgentDecision decision = decisionValidator.parseAndValidate(turn.proposedDecisionJson(), message,
-						history, observedEvidence);
+				AgentDecision decision = withVerifiedToolEvidence(
+						decisionValidator.parseAndValidate(turn.proposedDecisionJson(), message,
+								history, observedEvidence), observedEvidence);
 				memoryStore.add(context.sessionId(), customerId,
 						new ConversationTurn(message, decision.message(), observedEvidence));
 				log.info("Agent decision accepted outcome={} llmCalls={} toolCalls={}",
@@ -194,6 +198,41 @@ public class SupportAgentService {
 		}
 		return ChatResponse.safeFailure("The request reached the safe iteration limit. Please narrow it down.",
 				llmCalls, toolCalls);
+	}
+
+	private AgentDecision withVerifiedToolEvidence(AgentDecision decision,
+			List<ExecutedToolCall> observedEvidence) {
+		List<String> evidence = new ArrayList<>(decision.evidence());
+		for (ExecutedToolCall call : observedEvidence) {
+			if (!call.success()) {
+				continue;
+			}
+			if (GetCustomerOrdersTool.NAME.equals(call.name()) && call.output() instanceof List<?> values) {
+				List<CustomerOrderResponse> orders = values.stream()
+						.filter(CustomerOrderResponse.class::isInstance)
+						.map(CustomerOrderResponse.class::cast)
+						.toList();
+				if (orders.isEmpty()) {
+					evidence.add("get_customer_orders returned no owned orders.");
+				} else {
+					String verifiedOrders = orders.stream().map(order -> order.orderId() + " ("
+							+ (order.overallStatus() == null ? "status unavailable"
+									: order.overallStatus().code()) + ")")
+							.collect(java.util.stream.Collectors.joining(", "));
+					evidence.add("get_customer_orders verified these owned orders: " + verifiedOrders + ".");
+				}
+			}
+			if (GetDeliveryStatusTool.NAME.equals(call.name())
+					&& call.output() instanceof GetDeliveryStatusTool.DeliveryToolResult delivery) {
+				var finding = delivery.investigatorFinding();
+				evidence.add("get_delivery_status verified " + delivery.orderId() + " status "
+						+ finding.statusCode() + " (" + finding.status() + ") as of "
+						+ finding.observedAt() + ".");
+			}
+		}
+		return new AgentDecision(decision.message(), decision.outcome(), decision.resolvedIntents(),
+				decision.orderId(), evidence.stream().distinct().toList(), decision.recommendations(),
+				decision.actionsRequiringApproval());
 	}
 
 	private long durationMs(Instant startedAt, Instant completedAt) {

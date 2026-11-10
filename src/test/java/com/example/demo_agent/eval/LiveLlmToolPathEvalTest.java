@@ -42,7 +42,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 		properties = {
 				"server.port=${LIVE_EVAL_PORT:18080}",
 				"support.order-api.base-url=http://localhost:${LIVE_EVAL_PORT:18080}",
-				"support.llm.max-retries=3",
+				"support.agent.max-iterations=4",
+				"support.llm.max-retries=0",
 				"spring.datasource.url=jdbc:sqlite:${java.io.tmpdir}/demo-agent-live-eval.db"
 		})
 @Import(LiveLlmToolPathEvalTest.EventQueueConfiguration.class)

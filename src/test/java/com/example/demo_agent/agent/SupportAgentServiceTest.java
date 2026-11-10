@@ -55,6 +55,9 @@ class SupportAgentServiceTest {
 		assertThat(response.outcome()).isEqualTo("ANSWERED");
 		assertThat(response.llmCalls()).isEqualTo(2);
 		assertThat(response.toolCalls()).isEqualTo(1);
+		assertThat(response.evidence()).contains(
+				"get_customer_orders verified these owned orders: "
+						+ "ORD-1001 (ORDER_PLACED), ORD-1002 (ORDER_PLACED).");
 		assertThat(session.submittedResults).hasSize(1);
 	}
 
