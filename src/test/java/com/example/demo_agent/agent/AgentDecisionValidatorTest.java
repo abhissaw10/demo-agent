@@ -3,7 +3,7 @@ package com.example.demo_agent.agent;
 import com.example.demo_agent.api.CustomerOrderResponse;
 import com.example.demo_agent.api.OrderStatusResponse;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.GetDeliveryStatusTool;
+import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import org.junit.jupiter.api.Test;
 
@@ -26,7 +26,7 @@ class AgentDecisionValidatorTest {
 				new CustomerOrderResponse("CUST-1001", "ORD-1001", date, status),
 				new CustomerOrderResponse("CUST-1001", "ORD-1002", date.plusDays(1), status));
 		ExecutedToolCall evidence = new ExecutedToolCall("call-1", GetCustomerOrdersTool.NAME, orders, true, null);
-		ExecutedToolCall delivery = new ExecutedToolCall("call-2", GetDeliveryStatusTool.NAME,
+		ExecutedToolCall delivery = new ExecutedToolCall("call-2", InvestigateDeliveryTool.NAME,
 				"verified investigator result", true, null);
 		String decision = """
 				{"message":"ORD-1001 is being prepared.","outcome":"ANSWERED",
@@ -144,7 +144,7 @@ class AgentDecisionValidatorTest {
 				"Where is ORD-1002?", "ORD-1002 is awaiting inventory refresh.", List.of(
 						new ExecutedToolCall("orders", GetCustomerOrdersTool.NAME,
 								"verified ownership", true, null),
-						new ExecutedToolCall("delivery", GetDeliveryStatusTool.NAME,
+						new ExecutedToolCall("delivery", InvestigateDeliveryTool.NAME,
 								"verified delivery", true, null))));
 
 		AgentDecision result = validator.parseAndValidate(decision,

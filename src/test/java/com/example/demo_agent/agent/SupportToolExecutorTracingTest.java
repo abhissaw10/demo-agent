@@ -1,7 +1,7 @@
 package com.example.demo_agent.agent;
 
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.GetDeliveryStatusTool;
+import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import com.example.demo_agent.tool.ToolExecutionContext;
@@ -29,7 +29,7 @@ class SupportToolExecutorTracingTest {
 		when(refundPolicy.execute(any(), any()))
 				.thenReturn(new GetRefundPolicyTool.PolicyToolResult("refund", "refund policy"));
 		SupportToolExecutor executor = new SupportToolExecutor(mock(GetCustomerOrdersTool.class),
-				mock(GetDeliveryStatusTool.class), refundPolicy, mock(GetExchangePolicyTool.class),
+				mock(InvestigateDeliveryTool.class), refundPolicy, mock(GetExchangePolicyTool.class),
 				new CapturingPublisher());
 		AgentRunContext run = new AgentRunContext(UUID.randomUUID(), "session-1", "trace-1",
 				"root-span", Instant.now(), "test-agent", "test-prompt");
@@ -48,7 +48,7 @@ class SupportToolExecutorTracingTest {
 	@Test
 	void givesEveryToolCallAUniqueChildSpanAndPairedLifecycleEvents() {
 		GetCustomerOrdersTool customerOrders = mock(GetCustomerOrdersTool.class);
-		GetDeliveryStatusTool deliveryStatus = mock(GetDeliveryStatusTool.class);
+		InvestigateDeliveryTool deliveryStatus = mock(InvestigateDeliveryTool.class);
 		GetRefundPolicyTool refundPolicy = mock(GetRefundPolicyTool.class);
 		GetExchangePolicyTool exchangePolicy = mock(GetExchangePolicyTool.class);
 		List<String> spansObservedInsideTools = new CopyOnWriteArrayList<>();

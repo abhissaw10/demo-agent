@@ -3,7 +3,7 @@ package com.example.demo_agent.agent;
 import com.example.demo_agent.api.CustomerOrderResponse;
 import com.example.demo_agent.api.OrderStatusResponse;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.GetDeliveryStatusTool;
+import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import org.junit.jupiter.api.Test;
@@ -21,7 +21,7 @@ class DeterministicToolPathNegativeTest {
 
 	@Test
 	void noOrdersBlocksDeliveryStatusTool() {
-		assertBlockedAfterNoOrders("Where is ORD-1001?", GetDeliveryStatusTool.NAME);
+		assertBlockedAfterNoOrders("Where is ORD-1001?", InvestigateDeliveryTool.NAME);
 	}
 
 	@Test
@@ -63,11 +63,11 @@ class DeterministicToolPathNegativeTest {
 	void mixedFulfilledAndUnfulfilledOrdersStillAllowsRefundPath() {
 		ExecutedToolCall orders = orders(List.of(order("ORD-1001", "DELIVERED"),
 				order("ORD-1002", "AWAITING_INVENTORY_REFRESH")));
-		RequestedToolCall delivery = requested("delivery", GetDeliveryStatusTool.NAME);
+		RequestedToolCall delivery = requested("delivery", InvestigateDeliveryTool.NAME);
 		assertThatCode(() -> policy.validateProposed("Can I refund ORD-1002?", List.of(orders), List.of(delivery)))
 				.doesNotThrowAnyException();
 
-		ExecutedToolCall deliveryResult = new ExecutedToolCall("delivery", GetDeliveryStatusTool.NAME,
+		ExecutedToolCall deliveryResult = new ExecutedToolCall("delivery", InvestigateDeliveryTool.NAME,
 				"verified", true, null);
 		RequestedToolCall refund = requested("refund", GetRefundPolicyTool.NAME);
 		assertThatCode(() -> policy.validateProposed("Can I refund ORD-1002?",

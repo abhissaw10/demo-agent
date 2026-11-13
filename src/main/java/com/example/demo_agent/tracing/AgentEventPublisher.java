@@ -10,6 +10,15 @@ public interface AgentEventPublisher {
     default void publishFailed(AgentRunFailedEvent event) {
     }
 
+    default void publishDelegatedStarted(DelegatedAgentRunStartedEvent event) {
+    }
+
+    default void publishDelegatedCompleted(DelegatedAgentRunCompletedEvent event) {
+    }
+
+    default void publishDelegatedFailed(DelegatedAgentRunFailedEvent event) {
+    }
+
     default void publishToolCall(ToolCallEvent event) {
     }
 

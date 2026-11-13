@@ -1,4 +1,4 @@
-# Order Delivery Support Agent — Stage 2
+# Order Support and Delivery Agents
 
 This Spring Boot application now includes the Stage 1 order APIs plus a bounded, read-only support
 agent and a Vaadin chat UI. The model can request tools, but only application code validates and
@@ -129,10 +129,10 @@ facts instead of calling those tools again.
 
 ## Agent safety and orchestration
 
-The allow-list contains exactly these read-only tools:
+The Support Agent allow-list contains exactly these read-only tools:
 
 - `get_customer_orders` → `GetCustomerOrdersTool.java`
-- `get_delivery_status` → `GetDeliveryStatusTool.java`
+- `investigate_delivery` → `InvestigateDeliveryTool.java` (agent-to-agent adapter)
 - `get_refund_policy` → `GetRefundPolicyTool.java`
 - `get_exchange_policy` → `GetExchangePolicyTool.java`
 
@@ -140,10 +140,34 @@ The model also receives a control-plane `submit_agent_decision` function. Its ar
 proposed final response and are passed to `AgentDecisionValidator`; it is never sent to the business
 tool executor, does not perform an action, and does not count as a tool call.
 
-`OrderApiClient` calls the downstream REST contracts with bounded connect/read timeouts. Every
-delivery lookup revalidates order ownership. Raw tracking data is passed to the deterministic
-`DeliveryInvestigator`; the case manager receives its verified finding instead of interpreting the
-timeline itself.
+`DeliveryAgent` is the in-process agent-to-agent contract. `DeliveryAgentService` owns a separate,
+bounded LLM iteration loop, a delivery-specific prompt, order-ownership revalidation, and private
+delivery resource tools. Its model must call `resolve_delivery_order`, then
+`get_delivery_status_facts` when access is verified, and finally
+`submit_delivery_investigation`. Application code validates that sequence and reconstructs evidence
+from tool output. The Support Agent can invoke the Delivery Agent only through
+`investigate_delivery`, receives a `DeliveryInvestigationResult` containing structured facts, and
+remains solely responsible for customer-facing wording. This keeps support conversation/model state
+out of the Delivery Agent and raw tracking data out of the Support Agent.
+
+The Delivery Agent loop has its own budgets and reuses the configured OpenAI-compatible connection:
+
+```properties
+delivery.agent.max-iterations=4
+delivery.agent.max-tool-calls=2
+delivery.agent.max-validation-retries=2
+```
+
+The agent boundary preserves the caller's `sessionId` and `traceId`. The active
+`investigate_delivery` tool span becomes the Delivery Agent run's `parentSpanId`, while the Delivery
+Agent creates its own run ID and root span. Its LLM, private tools, and downstream order API calls
+then create child spans under that run. Each event includes `agentVersion`, so one trace can be
+grouped into Support Agent and Delivery Agent call counts without confusing their iterations:
+
+```text
+Support run → Support LLM → investigate_delivery
+                              └─ Delivery run → Delivery LLM → Delivery tool → Order API
+```
 
 The loop is bounded by these properties:
 
@@ -191,14 +215,17 @@ the consumer. The live eval harness subscribes to the same events and places the
 | Event | Trigger | Important attribute values |
 |---|---|---|
 | `AgentRunStartedEvent` | Immediately before a chat run starts | `runId` is a new UUID; `sessionId` comes from the request; `traceId` and root `spanId` come from MDC/HTTP correlation headers |
-| `LlmCallEvent STARTED` | Immediately before each logical `LlmSession.next()` | New LLM child `spanId`; `parentSpanId` is the run root; iteration, logical ordinal, model, and a new `llmCallId` are populated |
+| `DelegatedAgentRunStartedEvent` | Immediately after `investigate_delivery` crosses the agent boundary | The Delivery Agent gets a new `runId` and root span, inherits `sessionId`/`traceId`, and records the Support Agent run and tool span as `parentRunId`/`parentSpanId` |
+| `LlmCallEvent STARTED` | Immediately before each logical `LlmSession.next()` in either agent | New LLM child `spanId`; `parentSpanId` is that agent's run root; agent identity, iteration, logical ordinal, model, and a new `llmCallId` are populated |
 | `LlmCallEvent COMPLETED` | Immediately after that logical call returns or fails | Same IDs as STARTED; `providerCallCount` records actual provider calls including explicit rate-limit retries and structured-output fallback; requested tool names/IDs, success, and error type are populated |
-| `ToolCallEvent STARTED` | After application path validation and immediately before a tool executes | Every tool gets a unique child `spanId`; `parentSpanId` is the run root; originating LLM call/span IDs, tool call ID/name/ordinal, and sanitized arguments are populated |
+| `ToolCallEvent STARTED` | After application path validation and immediately before a tool executes in either agent | Every tool gets a unique child `spanId`; `parentSpanId` is that agent's run root; agent identity, originating LLM call/span IDs, tool call ID/name/ordinal, and sanitized arguments are populated |
 | `ResourceCallEvent STARTED` | Immediately before `OrderApiClient` invokes a downstream HTTP resource | New resource child `spanId`; `parentSpanId` is the executing tool span; tool name/ID, HTTP operation, and path template are populated |
 | `ResourceCallEvent COMPLETED` | When the downstream resource returns or fails | Same IDs as STARTED; success and downstream error code are populated |
 | `ToolCallEvent COMPLETED` | When tool execution returns or safely maps an error | Same tool span and correlation fields as STARTED; success and error code are populated |
 | `AgentRunCompletedEvent` | After a handled answer or safe failure is returned | Original run context, request/response, completion time, duration, and final LLM/tool counts |
 | `AgentRunFailedEvent` | When an unhandled runtime exception escapes the run | Original run context, failure time, duration, exception type, and message |
+| `DelegatedAgentRunCompletedEvent` | After the Delivery Agent returns a handled structured result | Original nested run linkage plus the Delivery Agent's own LLM/tool totals, result, completion time, and duration |
+| `DelegatedAgentRunFailedEvent` | When an unhandled exception escapes the Delivery Agent boundary | Original nested run linkage, failure time, duration, exception type, and message |
 
 This in-process bus is the preferred default while the producer and eval consumer run in the same
 Spring service. If events later need durability, replay, or consumption by another process, keep

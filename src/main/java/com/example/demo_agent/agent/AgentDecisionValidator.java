@@ -2,7 +2,7 @@ package com.example.demo_agent.agent;
 
 import com.example.demo_agent.api.CustomerOrderResponse;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.GetDeliveryStatusTool;
+import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -89,7 +89,7 @@ public class AgentDecisionValidator {
 		}
 		boolean deliveryIntent = mentions(lower, "delivery", "delivered", "tracking", "where is", "status");
 		if (deliveryIntent && "ANSWERED".equals(decision.outcome())
-				&& !successfulTools.contains(GetDeliveryStatusTool.NAME) && !noOrders) {
+				&& !successfulTools.contains(InvestigateDeliveryTool.NAME) && !noOrders) {
 			throw new DecisionValidationException("A delivery answer requires a Delivery Investigator finding.");
 		}
 		if (decision.orderId() != null && !ownedOrders.isEmpty() && !ownedOrders.contains(decision.orderId())) {

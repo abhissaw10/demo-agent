@@ -105,7 +105,7 @@ public class OrderApiClient {
 	private <T> T exchange(String operation, String resource, String displayName, ApiCall<T> call) {
 		String parentSpanId = MDC.get("supportSpanId");
 		String resourceSpanId = CorrelationIds.newSpanId();
-		ResourceCallEvent event = ResourceCallEvent.started(runId(), MDC.get("sessionId"),
+		ResourceCallEvent event = ResourceCallEvent.started(runId(), MDC.get("agentVersion"), MDC.get("sessionId"),
 				MDC.get("supportTraceId"), resourceSpanId, parentSpanId, agentIteration(),
 				MDC.get("supportToolCallId"), MDC.get("supportToolName"), "HTTP", operation,
 				resource, Instant.now());

@@ -2,7 +2,7 @@ package com.example.demo_agent.agent;
 
 import com.example.demo_agent.config.SupportAgentProperties;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.GetDeliveryStatusTool;
+import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import com.openai.errors.BadRequestException;
@@ -34,7 +34,7 @@ public class OpenAiLlmSessionFactory implements LlmSessionFactory {
 	private static final Pattern RETRY_DELAY = Pattern.compile(
 			"try again in\\s+([0-9]+(?:\\.[0-9]+)?)(ms|s)", Pattern.CASE_INSENSITIVE);
 	private static final Set<String> KNOWN_FUNCTIONS = Set.of(
-			GetCustomerOrdersTool.NAME, GetDeliveryStatusTool.NAME,
+			GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME,
 			GetRefundPolicyTool.NAME, GetExchangePolicyTool.NAME, SUBMIT_AGENT_DECISION);
 	private static final List<String> DECISION_FIELDS = List.of(
 			"message", "outcome", "resolvedIntents", "orderId", "evidence",
@@ -44,16 +44,20 @@ public class OpenAiLlmSessionFactory implements LlmSessionFactory {
 			You are the Case Manager for order support. Use only the four supplied read-only data tools.
 			Identify every material intent and use relevant conversation history. Resolve order ownership with
 			get_customer_orders. Never silently select an order when multiple owned orders could match; ask a
-			clarifying question. For tracking, rely only on get_delivery_status's Delivery Investigator finding;
-			do not interpret raw tracking or invent dates. Fetch policy tools whenever refund or exchange rules
+			clarifying question. For tracking, delegate to investigate_delivery and rely only on the Delivery Agent's
+			structured result; the Case Manager remains responsible for customer-facing wording. Do not interpret
+			raw tracking or invent dates. Fetch policy tools whenever refund or exchange rules
 			are material. Recommendations are not approvals. Never claim to refund, cancel, exchange, replace,
 			reserve inventory, or issue money. If evidence is incomplete, call another tool or ask for clarification.
+			Use CURRENT_STATUS for tracking, DELAY_EXPLANATION when the customer asks why an order is late, and
+			DELIVERY_PROBLEM for a reported delivery exception. Treat non-COMPLETED Delivery Agent outcomes as
+			structured limitations, not as verified delivery facts.
 
 			Use these deterministic paths for clear single-intent requests:
 			- List orders: get_customer_orders.
-			- Track an identified order: get_customer_orders, then get_delivery_status.
-			- Refund eligibility for an identified order: get_customer_orders, get_delivery_status, then get_refund_policy.
-			- Exchange eligibility for an identified order: get_customer_orders, get_delivery_status, then get_exchange_policy.
+			- Track an identified order: get_customer_orders, then investigate_delivery.
+			- Refund eligibility for an identified order: get_customer_orders, investigate_delivery, then get_refund_policy.
+			- Exchange eligibility for an identified order: get_customer_orders, investigate_delivery, then get_exchange_policy.
 			- A standalone policy question: get_customer_orders, then the matching policy tool.
 			Call only one deterministic-path tool per turn. If get_customer_orders finds no orders, stop.
 			If it finds only delivered orders, do not call refund or exchange policy tools.
@@ -147,8 +151,8 @@ public class OpenAiLlmSessionFactory implements LlmSessionFactory {
 					.maxOutputTokens(1800)
 					.addTool(GetCustomerOrdersTool.Arguments.class,
 							tool -> tool.name(GetCustomerOrdersTool.NAME))
-					.addTool(GetDeliveryStatusTool.Arguments.class,
-							tool -> tool.name(GetDeliveryStatusTool.NAME))
+					.addTool(InvestigateDeliveryTool.Arguments.class,
+							tool -> tool.name(InvestigateDeliveryTool.NAME))
 					.addTool(noArgumentTool(GetRefundPolicyTool.NAME,
 							"Read the authoritative refund policy. This tool is read-only and never issues money."))
 					.addTool(noArgumentTool(GetExchangePolicyTool.NAME,

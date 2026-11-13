@@ -75,6 +75,7 @@ class OrderApiClientTracingTest {
 		MDC.put("supportAgentIteration", "3");
 		MDC.put("supportToolCallId", "tool-call-refund");
 		MDC.put("supportToolName", "get_refund_policy");
+		MDC.put("agentVersion", "support-agent-v1");
 
 		String policy = client.getRefundPolicy();
 
@@ -85,6 +86,7 @@ class OrderApiClientTracingTest {
 		ResourceCallEvent started = publisher.events.getFirst();
 		ResourceCallEvent completed = publisher.events.getLast();
 		assertThat(started.runId()).isEqualTo(runId);
+		assertThat(started.agentVersion()).isEqualTo("support-agent-v1");
 		assertThat(started.sessionId()).isEqualTo("session-resource");
 		assertThat(started.traceId()).isEqualTo("trace-resource");
 		assertThat(started.parentSpanId()).isEqualTo("tool-span");

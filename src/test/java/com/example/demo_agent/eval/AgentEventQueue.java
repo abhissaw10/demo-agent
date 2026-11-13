@@ -3,6 +3,9 @@ package com.example.demo_agent.eval;
 import com.example.demo_agent.tracing.AgentRunCompletedEvent;
 import com.example.demo_agent.tracing.AgentRunFailedEvent;
 import com.example.demo_agent.tracing.AgentRunStartedEvent;
+import com.example.demo_agent.tracing.DelegatedAgentRunCompletedEvent;
+import com.example.demo_agent.tracing.DelegatedAgentRunFailedEvent;
+import com.example.demo_agent.tracing.DelegatedAgentRunStartedEvent;
 import com.example.demo_agent.tracing.LlmCallEvent;
 import com.example.demo_agent.tracing.ResourceCallEvent;
 import com.example.demo_agent.tracing.ToolCallEvent;
@@ -29,6 +32,21 @@ final class AgentEventQueue {
 
 	@EventListener
 	public void onRunFailed(AgentRunFailedEvent event) {
+		add(event);
+	}
+
+	@EventListener
+	public void onDelegatedRunStarted(DelegatedAgentRunStartedEvent event) {
+		add(event);
+	}
+
+	@EventListener
+	public void onDelegatedRunCompleted(DelegatedAgentRunCompletedEvent event) {
+		add(event);
+	}
+
+	@EventListener
+	public void onDelegatedRunFailed(DelegatedAgentRunFailedEvent event) {
 		add(event);
 	}
 

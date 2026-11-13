@@ -3,9 +3,10 @@ package com.example.demo_agent.agent;
 import com.example.demo_agent.api.ChatRequest;
 import com.example.demo_agent.api.ChatResponse;
 import com.example.demo_agent.api.CustomerOrderResponse;
+import com.example.demo_agent.agent.delivery.DeliveryInvestigationResult;
 import com.example.demo_agent.config.SupportAgentProperties;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.GetDeliveryStatusTool;
+import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.ToolExecutionContext;
 import com.example.demo_agent.tracing.AgentEventPublisher;
 import com.example.demo_agent.tracing.AgentRunCompletedEvent;
@@ -222,12 +223,13 @@ public class SupportAgentService {
 					evidence.add("get_customer_orders verified these owned orders: " + verifiedOrders + ".");
 				}
 			}
-			if (GetDeliveryStatusTool.NAME.equals(call.name())
-					&& call.output() instanceof GetDeliveryStatusTool.DeliveryToolResult delivery) {
-				var finding = delivery.investigatorFinding();
-				evidence.add("get_delivery_status verified " + delivery.orderId() + " status "
-						+ finding.statusCode() + " (" + finding.status() + ") as of "
-						+ finding.observedAt() + ".");
+			if (InvestigateDeliveryTool.NAME.equals(call.name())
+					&& call.output() instanceof DeliveryInvestigationResult delivery) {
+				evidence.add("Delivery Agent returned " + delivery.outcome() + " for "
+						+ delivery.orderId() + (delivery.statusCode() == null ? "."
+						: " with status " + delivery.statusCode() + "."));
+				delivery.evidence().forEach(item -> evidence.add(item.fact() + " ("
+						+ item.source() + ", observed " + item.observedAt() + ")."));
 			}
 		}
 		return new AgentDecision(decision.message(), decision.outcome(), decision.resolvedIntents(),

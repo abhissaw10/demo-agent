@@ -6,7 +6,7 @@ import com.example.demo_agent.api.CustomerOrderResponse;
 import com.example.demo_agent.api.OrderStatusResponse;
 import com.example.demo_agent.config.SupportAgentProperties;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.GetDeliveryStatusTool;
+import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import com.example.demo_agent.tracing.AgentEventPublisher;
 import com.example.demo_agent.tracing.AgentRunCompletedEvent;
@@ -138,7 +138,7 @@ class SupportAgentServiceTest {
 		List<List<ConversationTurn>> observedHistories = new ArrayList<>();
 		RequestedToolCall ownership = new RequestedToolCall("call-orders", GetCustomerOrdersTool.NAME,
 				"{\"customerId\":\"CUST-1001\"}");
-		RequestedToolCall delivery = new RequestedToolCall("call-delivery", GetDeliveryStatusTool.NAME,
+		RequestedToolCall delivery = new RequestedToolCall("call-delivery", InvestigateDeliveryTool.NAME,
 				"{\"orderId\":\"ORD-1001\"}");
 		LlmSessionFactory factory = (history, customerId, message) -> {
 			observedHistories.add(List.copyOf(history));
@@ -162,7 +162,7 @@ class SupportAgentServiceTest {
 		when(executor.execute(any(), any()))
 				.thenReturn(List.of(new ExecutedToolCall("call-orders", GetCustomerOrdersTool.NAME,
 						List.of(order("ORD-1001")), true, null)))
-				.thenReturn(List.of(new ExecutedToolCall("call-delivery", GetDeliveryStatusTool.NAME,
+				.thenReturn(List.of(new ExecutedToolCall("call-delivery", InvestigateDeliveryTool.NAME,
 						"verified investigator result", true, null)));
 		SupportAgentService service = service(factory, executor);
 
@@ -173,7 +173,7 @@ class SupportAgentServiceTest {
 		assertThat(followUp.toolCalls()).isZero();
 		assertThat(observedHistories.get(1)).singleElement().satisfies(turn ->
 				assertThat(turn.verifiedEvidence()).extracting(ExecutedToolCall::name)
-						.containsExactly(GetCustomerOrdersTool.NAME, GetDeliveryStatusTool.NAME));
+						.containsExactly(GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME));
 		verify(executor, times(2)).execute(any(), any());
 	}
 
@@ -230,11 +230,11 @@ class SupportAgentServiceTest {
 
 	@Test
 	void rejectsAnOutOfOrderToolBeforeExecutionThenAcceptsTheRequiredPath() {
-		RequestedToolCall prematureDelivery = new RequestedToolCall("call-wrong", GetDeliveryStatusTool.NAME,
+		RequestedToolCall prematureDelivery = new RequestedToolCall("call-wrong", InvestigateDeliveryTool.NAME,
 				"{\"orderId\":\"ORD-1001\"}");
 		RequestedToolCall ownership = new RequestedToolCall("call-orders", GetCustomerOrdersTool.NAME,
 				"{\"customerId\":\"CUST-1001\"}");
-		RequestedToolCall delivery = new RequestedToolCall("call-delivery", GetDeliveryStatusTool.NAME,
+		RequestedToolCall delivery = new RequestedToolCall("call-delivery", InvestigateDeliveryTool.NAME,
 				"{\"orderId\":\"ORD-1001\"}");
 		FakeSession session = new FakeSession(
 				new LlmTurn(List.of(prematureDelivery), null),
@@ -251,7 +251,7 @@ class SupportAgentServiceTest {
 		when(executor.execute(any(), any()))
 				.thenReturn(List.of(new ExecutedToolCall("call-orders", GetCustomerOrdersTool.NAME,
 						List.of(order("ORD-1001")), true, null)))
-				.thenReturn(List.of(new ExecutedToolCall("call-delivery", GetDeliveryStatusTool.NAME,
+				.thenReturn(List.of(new ExecutedToolCall("call-delivery", InvestigateDeliveryTool.NAME,
 						"verified investigator result", true, null)));
 
 		ChatResponse response = service(factory, executor)
@@ -265,10 +265,44 @@ class SupportAgentServiceTest {
 	}
 
 	@Test
+	void rejectsAMalformedDeliveryOrderIdBeforeToolExecutionThenAcceptsTheExactId() {
+		RequestedToolCall ownership = new RequestedToolCall("call-orders", GetCustomerOrdersTool.NAME,
+				"{\"customerId\":\"CUST-1002\"}");
+		RequestedToolCall malformed = new RequestedToolCall("call-malformed", InvestigateDeliveryTool.NAME,
+				"{\"orderId\":\"ORD-ORD-1003\",\"investigationType\":\"CURRENT_STATUS\"}");
+		RequestedToolCall corrected = new RequestedToolCall("call-delivery", InvestigateDeliveryTool.NAME,
+				"{\"orderId\":\"ORD-1003\",\"investigationType\":\"CURRENT_STATUS\"}");
+		FakeSession session = new FakeSession(
+				new LlmTurn(List.of(ownership), null),
+				new LlmTurn(List.of(malformed), null),
+				new LlmTurn(List.of(corrected), null),
+				new LlmTurn(List.of(), """
+						{"message":"ORD-1003 has a verified delivery status.","outcome":"ANSWERED",
+						"resolvedIntents":["delivery status"],"orderId":"ORD-1003",
+						"evidence":["The Delivery Agent returned a verified result."],
+						"recommendations":[],"actionsRequiringApproval":[]}
+						"""));
+		SupportToolExecutor executor = mock(SupportToolExecutor.class);
+		when(executor.execute(any(), any()))
+				.thenReturn(List.of(new ExecutedToolCall("call-orders", GetCustomerOrdersTool.NAME,
+						List.of(order("ORD-1003")), true, null)))
+				.thenReturn(List.of(new ExecutedToolCall("call-delivery", InvestigateDeliveryTool.NAME,
+						"verified delivery result", true, null)));
+
+		ChatResponse response = service((history, customerId, message) -> session, executor)
+				.chat(new ChatRequest("Where is ORD-1003?", "CUST-1002"), "session-order-id");
+
+		assertThat(response.outcome()).isEqualTo("ANSWERED");
+		assertThat(session.validationFailures).singleElement().asString()
+				.contains("exact orderId").contains("ORD-ORD-1003");
+		verify(executor, times(2)).execute(any(), any());
+	}
+
+	@Test
 	void noOrdersPreventsEveryToolAfterCustomerOrders() {
 		RequestedToolCall ownership = new RequestedToolCall("call-orders", GetCustomerOrdersTool.NAME,
 				"{\"customerId\":\"CUST-404\"}");
-		RequestedToolCall unnecessaryDelivery = new RequestedToolCall("call-delivery", GetDeliveryStatusTool.NAME,
+		RequestedToolCall unnecessaryDelivery = new RequestedToolCall("call-delivery", InvestigateDeliveryTool.NAME,
 				"{\"orderId\":\"ORD-404\"}");
 		FakeSession session = new FakeSession(
 				new LlmTurn(List.of(ownership), null),

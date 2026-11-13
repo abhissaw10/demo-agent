@@ -5,7 +5,7 @@ import com.example.demo_agent.agent.SupportAgentService;
 import com.example.demo_agent.api.ChatRequest;
 import com.example.demo_agent.api.ChatResponse;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.GetDeliveryStatusTool;
+import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import com.example.demo_agent.tracing.AgentRunCompletedEvent;
@@ -64,19 +64,19 @@ class LiveLlmToolPathEvalTest {
 	@Test
 	void eval02_trackingUsesOwnershipThenDelivery() {
 		assertPath(run("eval-track", "CUST-1001", "Where is ORD-1002?"), 3,
-				GetCustomerOrdersTool.NAME, GetDeliveryStatusTool.NAME);
+				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME);
 	}
 
 	@Test
 	void eval03_refundEligibilityUsesTheRefundPath() {
 		assertPath(run("eval-refund", "CUST-1001", "Is ORD-1002 eligible for a refund?"), 4,
-				GetCustomerOrdersTool.NAME, GetDeliveryStatusTool.NAME, GetRefundPolicyTool.NAME);
+				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME, GetRefundPolicyTool.NAME);
 	}
 
 	@Test
 	void eval04_exchangeEligibilityUsesTheExchangePath() {
 		assertPath(run("eval-exchange", "CUST-1001", "Can I exchange ORD-1002?"), 4,
-				GetCustomerOrdersTool.NAME, GetDeliveryStatusTool.NAME, GetExchangePolicyTool.NAME);
+				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME, GetExchangePolicyTool.NAME);
 	}
 
 	@Test
@@ -101,7 +101,7 @@ class LiveLlmToolPathEvalTest {
 	void eval08_combinedDeliveryAndRefundDoesNotDuplicateTools() {
 		assertPath(run("eval-combined", "CUST-1001",
 				"Where is ORD-1002, and is it eligible for a refund?"), 4,
-				GetCustomerOrdersTool.NAME, GetDeliveryStatusTool.NAME, GetRefundPolicyTool.NAME);
+				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME, GetRefundPolicyTool.NAME);
 	}
 
 	@Test
@@ -137,10 +137,15 @@ class LiveLlmToolPathEvalTest {
 	private void assertPath(EvalRun run, int expectedLogicalLlmCalls, String... expectedTools) {
 		List<LlmCallEvent> allLlmEvents = run.eventsOf(LlmCallEvent.class);
 		List<LlmCallEvent> llmEvents = allLlmEvents.stream()
+				.filter(event -> "stage-2".equals(event.agentVersion()))
 				.filter(event -> event.status() == LlmCallEvent.Status.COMPLETED)
 				.toList();
 		List<ToolCallEvent> allToolEvents = run.eventsOf(ToolCallEvent.class);
 		List<ToolCallEvent> toolEvents = allToolEvents.stream()
+				.filter(event -> "stage-2".equals(event.agentVersion()))
+				.filter(event -> event.status() == ToolCallEvent.Status.COMPLETED)
+				.toList();
+		List<ToolCallEvent> completedToolEvents = allToolEvents.stream()
 				.filter(event -> event.status() == ToolCallEvent.Status.COMPLETED)
 				.toList();
 		List<ResourceCallEvent> allResourceEvents = run.eventsOf(ResourceCallEvent.class);
@@ -186,7 +191,7 @@ class LiveLlmToolPathEvalTest {
 			assertThat(resource.traceId()).isEqualTo(run.traceId());
 			assertThat(resource.sessionId()).isEqualTo(run.sessionId());
 			assertThat(resource.spanId()).isNotEqualTo(resource.parentSpanId());
-			assertThat(toolEvents).anySatisfy(tool -> {
+			assertThat(completedToolEvents).anySatisfy(tool -> {
 				assertThat(resource.toolCallId()).isEqualTo(tool.toolCallId());
 				assertThat(resource.toolName()).isEqualTo(tool.toolName());
 				assertThat(resource.parentSpanId()).isEqualTo(tool.spanId());
@@ -210,7 +215,7 @@ class LiveLlmToolPathEvalTest {
 	private List<String> expectedResourceOperations(String... tools) {
 		return java.util.Arrays.stream(tools).flatMap(tool -> switch (tool) {
 			case GetCustomerOrdersTool.NAME -> java.util.stream.Stream.of("GET_CUSTOMER_ORDERS");
-			case GetDeliveryStatusTool.NAME -> java.util.stream.Stream.of(
+			case InvestigateDeliveryTool.NAME -> java.util.stream.Stream.of(
 					"GET_CUSTOMER_ORDERS", "GET_DELIVERY_STATUS");
 			case GetRefundPolicyTool.NAME -> java.util.stream.Stream.of("GET_REFUND_POLICY");
 			case GetExchangePolicyTool.NAME -> java.util.stream.Stream.of("GET_EXCHANGE_POLICY");
