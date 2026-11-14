@@ -1,6 +1,6 @@
 package com.example.demo_agent.controller;
 
-import com.example.demo_agent.agent.SupportAgentService;
+import com.example.demo_agent.agent.support.SupportAgentService;
 import com.example.demo_agent.api.ChatRequest;
 import com.example.demo_agent.api.ChatResponse;
 import com.example.demo_agent.tracing.CorrelationFilter;

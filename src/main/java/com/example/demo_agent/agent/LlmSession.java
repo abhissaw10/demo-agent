@@ -8,5 +8,9 @@ public interface LlmSession {
 
 	void submitToolResults(List<ExecutedToolCall> results);
 
+	default void submitDelegatedAgentResult(String agentName, Object result) {
+		throw new UnsupportedOperationException("This LLM session does not accept delegated agent results.");
+	}
+
 	void submitValidationFailure(String failure);
 }

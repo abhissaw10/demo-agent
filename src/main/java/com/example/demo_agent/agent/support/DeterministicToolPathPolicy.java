@@ -1,26 +1,23 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
+
+import com.example.demo_agent.agent.DecisionValidationException;
+import com.example.demo_agent.agent.ExecutedToolCall;
+import com.example.demo_agent.agent.RequestedToolCall;
 
 import com.example.demo_agent.api.CustomerOrderResponse;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
 public final class DeterministicToolPathPolicy {
 
 	private static final Pattern ORDER_ID = Pattern.compile("\\bORD-[A-Za-z0-9-]+\\b", Pattern.CASE_INSENSITIVE);
-	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
 	public Optional<ExpectedToolPath> expectedPath(String message) {
 		return expectedPath(message, List.of());
@@ -41,31 +38,31 @@ public final class DeterministicToolPathPolicy {
 				&& hasPriorEvidence(history, GetCustomerOrdersTool.NAME)) {
 			return Optional.of(new ExpectedToolPath("CONTEXT_RECALL", List.of()));
 		}
-		if (!namesOrder && refund && hasPriorEvidence(history,
-				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME)) {
+		if (!namesOrder && refund && hasPriorEvidence(history, GetCustomerOrdersTool.NAME)
+				&& historyNamesOrder(history)) {
 			return Optional.of(new ExpectedToolPath("CONTEXTUAL_REFUND_ELIGIBILITY",
 					List.of(GetRefundPolicyTool.NAME)));
 		}
-		if (!namesOrder && exchange && hasPriorEvidence(history,
-				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME)) {
+		if (!namesOrder && exchange && hasPriorEvidence(history, GetCustomerOrdersTool.NAME)
+				&& historyNamesOrder(history)) {
 			return Optional.of(new ExpectedToolPath("CONTEXTUAL_EXCHANGE_ELIGIBILITY",
 					List.of(GetExchangePolicyTool.NAME)));
 		}
-		if (!namesOrder && delivery && hasPriorEvidence(history, InvestigateDeliveryTool.NAME)
-				&& refersToPriorResult(normalized)) {
+		if (!namesOrder && delivery && hasPriorEvidence(history, GetCustomerOrdersTool.NAME)
+				&& historyNamesOrder(history) && refersToPriorResult(normalized)) {
 			return Optional.of(new ExpectedToolPath("CONTEXTUAL_DELIVERY_RECALL", List.of()));
 		}
 		if (namesOrder && refund) {
 			return Optional.of(new ExpectedToolPath("REFUND_ELIGIBILITY",
-					List.of(GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME, GetRefundPolicyTool.NAME)));
+					List.of(GetCustomerOrdersTool.NAME, GetRefundPolicyTool.NAME)));
 		}
 		if (namesOrder && exchange) {
 			return Optional.of(new ExpectedToolPath("EXCHANGE_ELIGIBILITY",
-					List.of(GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME, GetExchangePolicyTool.NAME)));
+					List.of(GetCustomerOrdersTool.NAME, GetExchangePolicyTool.NAME)));
 		}
 		if (namesOrder && delivery) {
 			return Optional.of(new ExpectedToolPath("DELIVERY_STATUS",
-					List.of(GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME)));
+					List.of(GetCustomerOrdersTool.NAME)));
 		}
 		if (!namesOrder && refund && policy) {
 			return Optional.of(new ExpectedToolPath("REFUND_POLICY",
@@ -88,7 +85,6 @@ public final class DeterministicToolPathPolicy {
 
 	public void validateProposed(String message, List<ConversationTurn> history,
 			List<ExecutedToolCall> observed, List<RequestedToolCall> proposed) {
-		validateDeliveryOrderId(message, observed, proposed);
 		expectedPath(message, history).ifPresent(path -> {
 			List<String> completed = completedToolNames(observed);
 			List<String> required = requiredPath(path, observed);
@@ -100,69 +96,6 @@ public final class DeterministicToolPathPolicy {
 						+ ", completed " + completed + " and proposed " + proposedNames + ".");
 			}
 		});
-	}
-
-	private void validateDeliveryOrderId(String message, List<ExecutedToolCall> observed,
-			List<RequestedToolCall> proposed) {
-		if (proposed.size() != 1 || !InvestigateDeliveryTool.NAME.equals(proposed.getFirst().name())) {
-			return;
-		}
-		String proposedOrderId = deliveryOrderId(proposed.getFirst());
-		if (proposedOrderId == null) {
-			return;
-		}
-
-		Set<String> ownedOrderIds = ownedOrderIds(observed);
-		Optional<String> namedOrderId = namedOrderId(message);
-		if (namedOrderId.isPresent() && !namedOrderId.get().equalsIgnoreCase(proposedOrderId)) {
-			throw new DecisionValidationException("investigate_delivery must use the exact orderId named "
-					+ "by the customer: " + namedOrderId.get() + ". Proposed " + proposedOrderId + ".");
-		}
-
-		ownedOrderIds.stream()
-				.filter(ownedOrderId -> ownedOrderId.equalsIgnoreCase(proposedOrderId))
-				.filter(ownedOrderId -> !ownedOrderId.equals(proposedOrderId))
-				.findFirst()
-				.ifPresent(ownedOrderId -> {
-					throw new DecisionValidationException("investigate_delivery must preserve the exact "
-							+ "orderId returned by get_customer_orders: " + ownedOrderId + ". Proposed "
-							+ proposedOrderId + ".");
-				});
-		if (namedOrderId.isEmpty() && !ownedOrderIds.isEmpty() && !ownedOrderIds.contains(proposedOrderId)) {
-			throw new DecisionValidationException("investigate_delivery must use an exact orderId returned "
-					+ "by get_customer_orders. Allowed " + ownedOrderIds + " but proposed "
-					+ proposedOrderId + ".");
-		}
-	}
-
-	private String deliveryOrderId(RequestedToolCall call) {
-		try {
-			JsonNode arguments = OBJECT_MAPPER.readTree(
-					call.argumentsJson() == null || call.argumentsJson().isBlank() ? "{}" : call.argumentsJson());
-			JsonNode orderId = arguments.get("orderId");
-			return orderId == null || !orderId.isTextual() || orderId.textValue().isBlank()
-					? null : orderId.textValue().trim();
-		} catch (JsonProcessingException exception) {
-			return null;
-		}
-	}
-
-	private Optional<String> namedOrderId(String message) {
-		var matcher = ORDER_ID.matcher(message);
-		return matcher.find() ? Optional.of(matcher.group()) : Optional.empty();
-	}
-
-	private Set<String> ownedOrderIds(List<ExecutedToolCall> observed) {
-		return observed.stream()
-				.filter(call -> GetCustomerOrdersTool.NAME.equals(call.name()) && call.success())
-				.map(ExecutedToolCall::output)
-				.filter(List.class::isInstance)
-				.map(value -> (List<?>) value)
-				.flatMap(List::stream)
-				.filter(CustomerOrderResponse.class::isInstance)
-				.map(CustomerOrderResponse.class::cast)
-				.map(CustomerOrderResponse::orderId)
-				.collect(Collectors.toUnmodifiableSet());
 	}
 
 	public void validateComplete(String message, List<ExecutedToolCall> observed) {
@@ -309,6 +242,11 @@ public final class DeterministicToolPathPolicy {
 				.map(ExecutedToolCall::name)
 				.toList();
 		return java.util.Arrays.stream(toolNames).allMatch(successfulTools::contains);
+	}
+
+	private boolean historyNamesOrder(List<ConversationTurn> history) {
+		return history.stream().anyMatch(turn -> ORDER_ID.matcher(
+				turn.userMessage() + " " + turn.assistantMessage()).find());
 	}
 
 	private boolean asksOnlyForKnownContext(String message) {

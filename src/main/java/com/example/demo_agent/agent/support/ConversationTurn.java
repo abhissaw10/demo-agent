@@ -1,4 +1,6 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
+
+import com.example.demo_agent.agent.ExecutedToolCall;
 
 import java.util.List;
 

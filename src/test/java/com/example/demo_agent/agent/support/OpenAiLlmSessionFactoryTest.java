@@ -1,10 +1,19 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
 
+import com.example.demo_agent.agent.ExecutedToolCall;
+import com.example.demo_agent.agent.LlmSession;
+import com.example.demo_agent.agent.LlmTurn;
+import com.example.demo_agent.agent.RequestedToolCall;
+
+import com.example.demo_agent.api.CustomerOrderResponse;
+import com.example.demo_agent.api.OrderStatusResponse;
 import com.example.demo_agent.config.SupportAgentProperties;
+import com.example.demo_agent.tool.GetCustomerOrdersTool;
 import com.openai.client.OpenAIClient;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,9 +78,25 @@ class OpenAiLlmSessionFactoryTest {
 	}
 
 	@Test
+	void includesPriorVerifiedOrderDateInTheNextModelContext() {
+		LocalDateTime placedAt = LocalDateTime.of(2026, 10, 18, 8, 0);
+		CustomerOrderResponse order = new CustomerOrderResponse("CUST-1003", "ORD-1005", placedAt,
+				new OrderStatusResponse("LOST_IN_TRANSIT", "Lost in transit", "Lost",
+						placedAt.plusDays(3), true));
+		ConversationTurn turn = new ConversationTurn("Where is ORD-1005?",
+				"ORD-1005 is lost in transit.", List.of(new ExecutedToolCall(
+						"orders", GetCustomerOrdersTool.NAME, List.of(order), true, null)));
+
+		String context = OpenAiLlmSessionFactory.verifiedHistoryContext(List.of(turn));
+
+		assertThat(context).contains("get_customer_orders", "ORD-1005",
+				"\"orderStartDate\":\"2026-10-18T08:00:00\"");
+	}
+
+	@Test
 	void ignoresAPrematureFinalDecisionWhenTheSameTurnStillRequestsData() {
 		RequestedToolCall dataCall = new RequestedToolCall(
-				"call-1", "investigate_delivery", "{\"orderId\":\"ORD-1001\",\"investigationType\":\"CURRENT_STATUS\"}");
+				"call-1", "get_refund_policy", "{}");
 		RequestedToolCall prematureDecision = new RequestedToolCall(
 				"decision-1", OpenAiLlmSessionFactory.SUBMIT_AGENT_DECISION, "{\"message\":\"premature\"}");
 
@@ -89,7 +114,7 @@ class OpenAiLlmSessionFactoryTest {
 				"400: Tool call validation failed: parameters for tool submit_agent_decision "
 						+ "did not match schema: missing properties: 'actionsRequiringApproval'")).isTrue();
 		assertThat(OpenAiLlmSessionFactory.isRejectedFinalDecisionArguments(
-				"400: Tool call validation failed: parameters for tool investigate_delivery did not match schema"))
+				"400: Tool call validation failed: parameters for tool get_refund_policy did not match schema"))
 				.isFalse();
 		assertThat(OpenAiLlmSessionFactory.isRejectedFinalDecisionArguments(
 				"400: attempted to call an unknown tool")).isFalse();

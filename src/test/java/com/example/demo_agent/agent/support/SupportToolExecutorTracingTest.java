@@ -1,7 +1,9 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
+
+import com.example.demo_agent.agent.ExecutedToolCall;
+import com.example.demo_agent.agent.RequestedToolCall;
 
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import com.example.demo_agent.tool.ToolExecutionContext;
@@ -29,7 +31,7 @@ class SupportToolExecutorTracingTest {
 		when(refundPolicy.execute(any(), any()))
 				.thenReturn(new GetRefundPolicyTool.PolicyToolResult("refund", "refund policy"));
 		SupportToolExecutor executor = new SupportToolExecutor(mock(GetCustomerOrdersTool.class),
-				mock(InvestigateDeliveryTool.class), refundPolicy, mock(GetExchangePolicyTool.class),
+				refundPolicy, mock(GetExchangePolicyTool.class),
 				new CapturingPublisher());
 		AgentRunContext run = new AgentRunContext(UUID.randomUUID(), "session-1", "trace-1",
 				"root-span", Instant.now(), "test-agent", "test-prompt");
@@ -48,7 +50,6 @@ class SupportToolExecutorTracingTest {
 	@Test
 	void givesEveryToolCallAUniqueChildSpanAndPairedLifecycleEvents() {
 		GetCustomerOrdersTool customerOrders = mock(GetCustomerOrdersTool.class);
-		InvestigateDeliveryTool deliveryStatus = mock(InvestigateDeliveryTool.class);
 		GetRefundPolicyTool refundPolicy = mock(GetRefundPolicyTool.class);
 		GetExchangePolicyTool exchangePolicy = mock(GetExchangePolicyTool.class);
 		List<String> spansObservedInsideTools = new CopyOnWriteArrayList<>();
@@ -61,7 +62,7 @@ class SupportToolExecutorTracingTest {
 			return new GetExchangePolicyTool.PolicyToolResult("exchange", "exchange policy");
 		});
 		CapturingPublisher publisher = new CapturingPublisher();
-		SupportToolExecutor executor = new SupportToolExecutor(customerOrders, deliveryStatus,
+		SupportToolExecutor executor = new SupportToolExecutor(customerOrders,
 				refundPolicy, exchangePolicy, publisher);
 		AgentRunContext run = new AgentRunContext(UUID.randomUUID(), "session-1", "trace-1",
 				"root-span", Instant.now(), "test-agent", "test-prompt");

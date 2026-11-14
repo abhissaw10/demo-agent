@@ -1,8 +1,9 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
 
+import com.example.demo_agent.agent.ExecutedToolCall;
+import com.example.demo_agent.agent.RequestedToolCall;
 import com.example.demo_agent.client.DownstreamApiException;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import com.example.demo_agent.tool.ToolExecutionContext;
@@ -31,35 +32,31 @@ public class SupportToolExecutor {
 
 	private static final Logger log = LoggerFactory.getLogger(SupportToolExecutor.class);
 	private static final Set<String> ALLOW_LIST = Set.of(
-			GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME,
-			GetRefundPolicyTool.NAME, GetExchangePolicyTool.NAME);
+			GetCustomerOrdersTool.NAME, GetRefundPolicyTool.NAME, GetExchangePolicyTool.NAME);
 
 	private final GetCustomerOrdersTool customerOrders;
-	private final InvestigateDeliveryTool deliveryAgentTool;
 	private final GetRefundPolicyTool refundPolicy;
 	private final GetExchangePolicyTool exchangePolicy;
 	private final AgentEventPublisher eventPublisher;
 	private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
-	public SupportToolExecutor(GetCustomerOrdersTool customerOrders, InvestigateDeliveryTool deliveryAgentTool,
+	public SupportToolExecutor(GetCustomerOrdersTool customerOrders,
 			GetRefundPolicyTool refundPolicy, GetExchangePolicyTool exchangePolicy) {
-		this(customerOrders, deliveryAgentTool, refundPolicy, exchangePolicy, new AgentEventPublisher() { });
+		this(customerOrders, refundPolicy, exchangePolicy, new AgentEventPublisher() { });
 	}
 
 	@Autowired
-	public SupportToolExecutor(GetCustomerOrdersTool customerOrders, InvestigateDeliveryTool deliveryAgentTool,
+	public SupportToolExecutor(GetCustomerOrdersTool customerOrders,
 			GetRefundPolicyTool refundPolicy, GetExchangePolicyTool exchangePolicy,
 			AgentEventPublisher eventPublisher) {
 		this.customerOrders = customerOrders;
-		this.deliveryAgentTool = deliveryAgentTool;
 		this.refundPolicy = refundPolicy;
 		this.exchangePolicy = exchangePolicy;
 		this.eventPublisher = eventPublisher;
 	}
 
 	public List<ExecutedToolCall> execute(List<RequestedToolCall> calls, ToolExecutionContext context) {
-		boolean independent = calls.size() > 1
-				&& calls.stream().noneMatch(call -> InvestigateDeliveryTool.NAME.equals(call.name()));
+		boolean independent = calls.size() > 1;
 		if (!independent) {
 			return java.util.stream.IntStream.range(0, calls.size())
 					.mapToObj(index -> executeOne(calls.get(index), context,
@@ -112,8 +109,6 @@ public class SupportToolExecutor {
 			Object output = switch (call.name()) {
 				case GetCustomerOrdersTool.NAME -> customerOrders.execute(
 						parse(call, GetCustomerOrdersTool.Arguments.class), context);
-				case InvestigateDeliveryTool.NAME -> deliveryAgentTool.execute(
-						parse(call, InvestigateDeliveryTool.Arguments.class), context);
 				case GetRefundPolicyTool.NAME -> refundPolicy.execute(
 						parse(call, GetRefundPolicyTool.Arguments.class), context);
 				case GetExchangePolicyTool.NAME -> exchangePolicy.execute(

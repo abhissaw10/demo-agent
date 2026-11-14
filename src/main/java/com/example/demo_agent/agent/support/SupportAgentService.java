@@ -1,12 +1,22 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
+
+import com.example.demo_agent.agent.DecisionValidationException;
+import com.example.demo_agent.agent.ExecutedToolCall;
+import com.example.demo_agent.agent.LlmCallFailureException;
+import com.example.demo_agent.agent.LlmConfigurationException;
+import com.example.demo_agent.agent.LlmSession;
+import com.example.demo_agent.agent.LlmTurn;
+import com.example.demo_agent.agent.AgentInvocationContext;
 
 import com.example.demo_agent.api.ChatRequest;
 import com.example.demo_agent.api.ChatResponse;
 import com.example.demo_agent.api.CustomerOrderResponse;
+import com.example.demo_agent.agent.delivery.DeliveryInvestigationRequest;
 import com.example.demo_agent.agent.delivery.DeliveryInvestigationResult;
+import com.example.demo_agent.agent.delivery.DeliveryInvestigationType;
+import com.example.demo_agent.client.DeliveryAgentApiClient;
 import com.example.demo_agent.config.SupportAgentProperties;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.ToolExecutionContext;
 import com.example.demo_agent.tracing.AgentEventPublisher;
 import com.example.demo_agent.tracing.AgentRunCompletedEvent;
@@ -27,37 +37,51 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 @Service
 public class SupportAgentService {
 
 	private static final Logger log = LoggerFactory.getLogger(SupportAgentService.class);
+	private static final Pattern ORDER_ID = Pattern.compile("\\bORD-[A-Za-z0-9-]+\\b",
+			Pattern.CASE_INSENSITIVE);
 
 	private final LlmSessionFactory sessionFactory;
 	private final SupportToolExecutor toolExecutor;
 	private final AgentDecisionValidator decisionValidator;
 	private final ConversationMemoryStore memoryStore;
 	private final SupportAgentProperties properties;
+	private final DeliveryAgentApiClient deliveryAgentClient;
 	private final AgentEventPublisher eventPublisher;
 	private final DeterministicToolPathPolicy toolPathPolicy = new DeterministicToolPathPolicy();
 
 	public SupportAgentService(LlmSessionFactory sessionFactory, SupportToolExecutor toolExecutor,
 			AgentDecisionValidator decisionValidator, ConversationMemoryStore memoryStore,
 			SupportAgentProperties properties) {
-		this(sessionFactory, toolExecutor, decisionValidator, memoryStore, properties,
+		this(sessionFactory, toolExecutor, decisionValidator, memoryStore, properties, null,
 				new AgentEventPublisher() { });
+	}
+
+	public SupportAgentService(LlmSessionFactory sessionFactory, SupportToolExecutor toolExecutor,
+			AgentDecisionValidator decisionValidator, ConversationMemoryStore memoryStore,
+			SupportAgentProperties properties, AgentEventPublisher eventPublisher) {
+		this(sessionFactory, toolExecutor, decisionValidator, memoryStore, properties, null, eventPublisher);
 	}
 
 	@Autowired
 	public SupportAgentService(LlmSessionFactory sessionFactory, SupportToolExecutor toolExecutor,
 			AgentDecisionValidator decisionValidator, ConversationMemoryStore memoryStore,
-			SupportAgentProperties properties, AgentEventPublisher eventPublisher) {
+			SupportAgentProperties properties, DeliveryAgentApiClient deliveryAgentClient,
+			AgentEventPublisher eventPublisher) {
 		this.sessionFactory = sessionFactory;
 		this.toolExecutor = toolExecutor;
 		this.decisionValidator = decisionValidator;
 		this.memoryStore = memoryStore;
 		this.properties = properties;
+		this.deliveryAgentClient = deliveryAgentClient;
 		this.eventPublisher = eventPublisher;
 	}
 
@@ -87,6 +111,7 @@ public class SupportAgentService {
 		int logicalLlmCalls = 0;
 		int toolCalls = 0;
 		int validationRetries = 0;
+		DeliveryInvestigationResult deliveryInvestigation = null;
 		List<ExecutedToolCall> observedEvidence = new ArrayList<>();
 		Map<String, Integer> repeatedFailures = new HashMap<>();
 
@@ -165,7 +190,8 @@ public class SupportAgentService {
 				java.util.Optional<AgentDecision> earlyDecision =
 						toolPathPolicy.earlyDecision(message, history, observedEvidence);
 				if (earlyDecision.isPresent()) {
-					AgentDecision decision = withVerifiedToolEvidence(earlyDecision.get(), observedEvidence);
+					AgentDecision decision = withVerifiedEvidence(
+							earlyDecision.get(), observedEvidence, deliveryInvestigation);
 					memoryStore.add(context.sessionId(), customerId,
 							new ConversationTurn(message, decision.message(), observedEvidence));
 					log.info("Deterministic early decision accepted outcome={} llmCalls={} toolCalls={}",
@@ -173,14 +199,22 @@ public class SupportAgentService {
 					return ChatResponse.from(decision, llmCalls, toolCalls);
 				}
 				session.submitToolResults(results);
+				if (deliveryInvestigation == null) {
+					deliveryInvestigation = investigateDelivery(message, history, customerId,
+							context, iteration, observedEvidence);
+					if (deliveryInvestigation != null) {
+						session.submitDelegatedAgentResult("delivery-agent", deliveryInvestigation);
+					}
+				}
 				continue;
 			}
 
 			try {
 				toolPathPolicy.validateComplete(message, history, observedEvidence);
-				AgentDecision decision = withVerifiedToolEvidence(
+				AgentDecision decision = withVerifiedEvidence(
 						decisionValidator.parseAndValidate(turn.proposedDecisionJson(), message,
-								history, observedEvidence), observedEvidence);
+								history, observedEvidence, deliveryInvestigation),
+						observedEvidence, deliveryInvestigation);
 				memoryStore.add(context.sessionId(), customerId,
 						new ConversationTurn(message, decision.message(), observedEvidence));
 				log.info("Agent decision accepted outcome={} llmCalls={} toolCalls={}",
@@ -201,8 +235,9 @@ public class SupportAgentService {
 				llmCalls, toolCalls);
 	}
 
-	private AgentDecision withVerifiedToolEvidence(AgentDecision decision,
-			List<ExecutedToolCall> observedEvidence) {
+	private AgentDecision withVerifiedEvidence(AgentDecision decision,
+			List<ExecutedToolCall> observedEvidence,
+			DeliveryInvestigationResult deliveryInvestigation) {
 		List<String> evidence = new ArrayList<>(decision.evidence());
 		for (ExecutedToolCall call : observedEvidence) {
 			if (!call.success()) {
@@ -223,18 +258,103 @@ public class SupportAgentService {
 					evidence.add("get_customer_orders verified these owned orders: " + verifiedOrders + ".");
 				}
 			}
-			if (InvestigateDeliveryTool.NAME.equals(call.name())
-					&& call.output() instanceof DeliveryInvestigationResult delivery) {
-				evidence.add("Delivery Agent returned " + delivery.outcome() + " for "
-						+ delivery.orderId() + (delivery.statusCode() == null ? "."
-						: " with status " + delivery.statusCode() + "."));
-				delivery.evidence().forEach(item -> evidence.add(item.fact() + " ("
-						+ item.source() + ", observed " + item.observedAt() + ")."));
-			}
+		}
+		if (deliveryInvestigation != null) {
+			evidence.add("Delivery Agent returned " + deliveryInvestigation.outcome() + " for "
+					+ deliveryInvestigation.orderId() + (deliveryInvestigation.statusCode() == null ? "."
+					: " with status " + deliveryInvestigation.statusCode() + "."));
+			deliveryInvestigation.evidence().forEach(item -> evidence.add(item.fact() + " ("
+					+ item.source() + ", observed " + item.observedAt() + ")."));
 		}
 		return new AgentDecision(decision.message(), decision.outcome(), decision.resolvedIntents(),
 				decision.orderId(), evidence.stream().distinct().toList(), decision.recommendations(),
 				decision.actionsRequiringApproval());
+	}
+
+	private DeliveryInvestigationResult investigateDelivery(String message,
+			List<ConversationTurn> history, String customerId, AgentRunContext context,
+			int iteration, List<ExecutedToolCall> evidence) {
+		if (deliveryAgentClient == null || !requiresDeliveryInvestigation(message, history)) {
+			return null;
+		}
+		Optional<String> orderId = selectedOwnedOrderId(message, history, evidence);
+		if (orderId.isEmpty()) {
+			return null;
+		}
+		String parentSpanId = context.rootSpanId();
+		AgentInvocationContext invocation = new AgentInvocationContext(context.runId(),
+				context.sessionId(), context.traceId(), parentSpanId, Instant.now());
+		log.info("Delegating delivery investigation over HTTP orderId={} iteration={}",
+				orderId.get(), iteration);
+		String previousAgentVersion = MDC.get("agentVersion");
+		try {
+			MDC.put("agentVersion", context.agentVersion());
+			return deliveryAgentClient.investigate(new DeliveryInvestigationRequest(
+					customerId, orderId.get(), investigationType(message)), invocation, iteration);
+		} finally {
+			restoreMdc("agentVersion", previousAgentVersion);
+		}
+	}
+
+	private boolean requiresDeliveryInvestigation(String message, List<ConversationTurn> history) {
+		return toolPathPolicy.expectedPath(message, history)
+				.map(DeterministicToolPathPolicy.ExpectedToolPath::useCase)
+				.filter(useCase -> java.util.Set.of("DELIVERY_STATUS", "REFUND_ELIGIBILITY",
+						"EXCHANGE_ELIGIBILITY", "CONTEXTUAL_REFUND_ELIGIBILITY",
+						"CONTEXTUAL_EXCHANGE_ELIGIBILITY").contains(useCase))
+				.isPresent();
+	}
+
+	private Optional<String> selectedOwnedOrderId(String message, List<ConversationTurn> history,
+			List<ExecutedToolCall> evidence) {
+		var priorEvidence = history.stream().flatMap(turn -> turn.verifiedEvidence().stream());
+		List<CustomerOrderResponse> orders = java.util.stream.Stream.concat(priorEvidence, evidence.stream())
+				.filter(call -> GetCustomerOrdersTool.NAME.equals(call.name()) && call.success())
+				.map(ExecutedToolCall::output)
+				.filter(List.class::isInstance)
+				.map(value -> (List<?>) value)
+				.flatMap(List::stream)
+				.filter(CustomerOrderResponse.class::isInstance)
+				.map(CustomerOrderResponse.class::cast)
+				.distinct()
+				.toList();
+		var matcher = ORDER_ID.matcher(message);
+		if (matcher.find()) {
+			String requested = matcher.group();
+			return orders.stream().map(CustomerOrderResponse::orderId)
+					.filter(owned -> owned.equalsIgnoreCase(requested)).findFirst();
+		}
+		for (int index = history.size() - 1; index >= 0; index--) {
+			ConversationTurn turn = history.get(index);
+			var priorMatcher = ORDER_ID.matcher(turn.userMessage() + " " + turn.assistantMessage());
+			if (priorMatcher.find()) {
+				String requested = priorMatcher.group();
+				return orders.stream().map(CustomerOrderResponse::orderId)
+						.filter(owned -> owned.equalsIgnoreCase(requested)).findFirst();
+			}
+		}
+		return orders.size() == 1 ? Optional.of(orders.getFirst().orderId()) : Optional.empty();
+	}
+
+	private DeliveryInvestigationType investigationType(String message) {
+		String normalized = message.toLowerCase(Locale.ROOT);
+		if (mentions(normalized, "late", "delay", "delayed", "why hasn't", "why has not")) {
+			return DeliveryInvestigationType.DELAY_EXPLANATION;
+		}
+		if (mentions(normalized, "missing", "lost", "damaged", "wrong address",
+				"delivery problem", "not delivered")) {
+			return DeliveryInvestigationType.DELIVERY_PROBLEM;
+		}
+		return DeliveryInvestigationType.CURRENT_STATUS;
+	}
+
+	private boolean mentions(String text, String... terms) {
+		for (String term : terms) {
+			if (text.contains(term)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private long durationMs(Instant startedAt, Instant completedAt) {

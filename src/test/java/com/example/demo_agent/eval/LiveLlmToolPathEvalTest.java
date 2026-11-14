@@ -1,11 +1,10 @@
 package com.example.demo_agent.eval;
 
 import com.example.demo_agent.DemoAgentApplication;
-import com.example.demo_agent.agent.SupportAgentService;
+import com.example.demo_agent.agent.support.SupportAgentService;
 import com.example.demo_agent.api.ChatRequest;
 import com.example.demo_agent.api.ChatResponse;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import com.example.demo_agent.tracing.AgentRunCompletedEvent;
@@ -15,6 +14,8 @@ import com.example.demo_agent.tracing.ResourceCallEvent;
 import com.example.demo_agent.tracing.ToolCallEvent;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Execution;
@@ -42,12 +43,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 		properties = {
 				"server.port=${LIVE_EVAL_PORT:18080}",
 				"support.order-api.base-url=http://localhost:${LIVE_EVAL_PORT:18080}",
+				"support.delivery-agent-api.base-url=http://localhost:${LIVE_DELIVERY_EVAL_PORT:18081}",
 				"support.agent.max-iterations=4",
 				"support.llm.max-retries=0",
 				"spring.datasource.url=jdbc:sqlite:${java.io.tmpdir}/demo-agent-live-eval.db"
 		})
 @Import(LiveLlmToolPathEvalTest.EventQueueConfiguration.class)
 class LiveLlmToolPathEvalTest {
+	private static LiveDeliveryAgentServer deliveryAgentServer;
+
+	@BeforeAll
+	static void startDeliveryAgent() {
+		deliveryAgentServer = LiveDeliveryAgentServer.start();
+	}
+
+	@AfterAll
+	static void stopDeliveryAgent() {
+		if (deliveryAgentServer != null) {
+			deliveryAgentServer.close();
+		}
+	}
 
 	@Autowired
 	private SupportAgentService agent;
@@ -57,51 +72,51 @@ class LiveLlmToolPathEvalTest {
 
 	@Test
 	void eval01_listOrdersUsesOnlyCustomerOrders() {
-		assertPath(run("eval-list", "CUST-1001", "Show my orders"), 2,
+		assertPath(run("eval-list", "CUST-1001", "Show my orders"), 2, false,
 				GetCustomerOrdersTool.NAME);
 	}
 
 	@Test
 	void eval02_trackingUsesOwnershipThenDelivery() {
-		assertPath(run("eval-track", "CUST-1001", "Where is ORD-1002?"), 3,
-				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME);
+		assertPath(run("eval-track", "CUST-1001", "Where is ORD-1002?"), 2, true,
+				GetCustomerOrdersTool.NAME);
 	}
 
 	@Test
 	void eval03_refundEligibilityUsesTheRefundPath() {
-		assertPath(run("eval-refund", "CUST-1001", "Is ORD-1002 eligible for a refund?"), 4,
-				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME, GetRefundPolicyTool.NAME);
+		assertPath(run("eval-refund", "CUST-1001", "Is ORD-1002 eligible for a refund?"), 3, true,
+				GetCustomerOrdersTool.NAME, GetRefundPolicyTool.NAME);
 	}
 
 	@Test
 	void eval04_exchangeEligibilityUsesTheExchangePath() {
-		assertPath(run("eval-exchange", "CUST-1001", "Can I exchange ORD-1002?"), 4,
-				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME, GetExchangePolicyTool.NAME);
+		assertPath(run("eval-exchange", "CUST-1001", "Can I exchange ORD-1002?"), 3, true,
+				GetCustomerOrdersTool.NAME, GetExchangePolicyTool.NAME);
 	}
 
 	@Test
 	void eval05_noOrdersStopsAfterCustomerOrders() {
-		assertPath(run("eval-no-orders", "CUST-404", "Where is ORD-404?"), 1,
+		assertPath(run("eval-no-orders", "CUST-404", "Where is ORD-404?"), 1, false,
 				GetCustomerOrdersTool.NAME);
 	}
 
 	@Test
 	void eval06_noUnfulfilledOrdersPreventsRefundTools() {
-		assertPath(run("eval-no-refund", "CUST-1004", "Can I get a refund for ORD-1006?"), 1,
+		assertPath(run("eval-no-refund", "CUST-1004", "Can I get a refund for ORD-1006?"), 1, false,
 				GetCustomerOrdersTool.NAME);
 	}
 
 	@Test
 	void eval07_noUnfulfilledOrdersPreventsExchangeTools() {
-		assertPath(run("eval-no-exchange", "CUST-1004", "Can I exchange ORD-1006?"), 1,
+		assertPath(run("eval-no-exchange", "CUST-1004", "Can I exchange ORD-1006?"), 1, false,
 				GetCustomerOrdersTool.NAME);
 	}
 
 	@Test
 	void eval08_combinedDeliveryAndRefundDoesNotDuplicateTools() {
 		assertPath(run("eval-combined", "CUST-1001",
-				"Where is ORD-1002, and is it eligible for a refund?"), 4,
-				GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME, GetRefundPolicyTool.NAME);
+				"Where is ORD-1002, and is it eligible for a refund?"), 3, true,
+				GetCustomerOrdersTool.NAME, GetRefundPolicyTool.NAME);
 	}
 
 	@Test
@@ -109,7 +124,7 @@ class LiveLlmToolPathEvalTest {
 		String sessionId = "eval-context-policy";
 		run(sessionId, "CUST-1001", "Where is ORD-1002?");
 
-		assertPath(run(sessionId, "CUST-1001", "Can I get a refund for it?"), 2,
+		assertPath(run(sessionId, "CUST-1001", "Can I get a refund for it?"), 2, false,
 				GetRefundPolicyTool.NAME);
 	}
 
@@ -118,7 +133,7 @@ class LiveLlmToolPathEvalTest {
 		String sessionId = "eval-context-only";
 		run(sessionId, "CUST-1001", "Where is ORD-1002?");
 
-		assertPath(run(sessionId, "CUST-1001", "Which order did we just discuss?"), 1);
+		assertPath(run(sessionId, "CUST-1001", "Which order did we just discuss?"), 1, false);
 	}
 
 	private EvalRun run(String sessionId, String customerId, String message) {
@@ -134,7 +149,8 @@ class LiveLlmToolPathEvalTest {
 		return new EvalRun(traceId, rootSpanId, sessionId, response, eventQueue.drain());
 	}
 
-	private void assertPath(EvalRun run, int expectedLogicalLlmCalls, String... expectedTools) {
+	private void assertPath(EvalRun run, int expectedLogicalLlmCalls,
+			boolean expectsDeliveryDelegation, String... expectedTools) {
 		List<LlmCallEvent> allLlmEvents = run.eventsOf(LlmCallEvent.class);
 		List<LlmCallEvent> llmEvents = allLlmEvents.stream()
 				.filter(event -> "stage-2".equals(event.agentVersion()))
@@ -186,16 +202,22 @@ class LiveLlmToolPathEvalTest {
 		assertThat(toolEvents).extracting(ToolCallEvent::spanId).doesNotHaveDuplicates();
 
 		assertThat(resourceEvents).extracting(ResourceCallEvent::operation)
-				.containsExactlyElementsOf(expectedResourceOperations(expectedTools));
+				.containsExactlyElementsOf(expectedResourceOperations(expectsDeliveryDelegation, expectedTools));
 		assertThat(resourceEvents).allSatisfy(resource -> {
 			assertThat(resource.traceId()).isEqualTo(run.traceId());
 			assertThat(resource.sessionId()).isEqualTo(run.sessionId());
 			assertThat(resource.spanId()).isNotEqualTo(resource.parentSpanId());
-			assertThat(completedToolEvents).anySatisfy(tool -> {
-				assertThat(resource.toolCallId()).isEqualTo(tool.toolCallId());
-				assertThat(resource.toolName()).isEqualTo(tool.toolName());
-				assertThat(resource.parentSpanId()).isEqualTo(tool.spanId());
-			});
+			if ("INVOKE_DELIVERY_AGENT".equals(resource.operation())) {
+				assertThat(resource.toolCallId()).isNull();
+				assertThat(resource.toolName()).isNull();
+				assertThat(resource.parentSpanId()).isEqualTo(run.rootSpanId());
+			} else {
+				assertThat(completedToolEvents).anySatisfy(tool -> {
+					assertThat(resource.toolCallId()).isEqualTo(tool.toolCallId());
+					assertThat(resource.toolName()).isEqualTo(tool.toolName());
+					assertThat(resource.parentSpanId()).isEqualTo(tool.spanId());
+				});
+			}
 		});
 
 		List<AgentRunCompletedEvent> completedRuns = run.eventsOf(AgentRunCompletedEvent.class);
@@ -212,15 +234,20 @@ class LiveLlmToolPathEvalTest {
 				.as("STARTED and COMPLETED events for %s", eventId).isEqualTo(2));
 	}
 
-	private List<String> expectedResourceOperations(String... tools) {
-		return java.util.Arrays.stream(tools).flatMap(tool -> switch (tool) {
+	private List<String> expectedResourceOperations(boolean expectsDeliveryDelegation, String... tools) {
+		List<String> operations = new java.util.ArrayList<>();
+		java.util.Arrays.stream(tools).flatMap(tool -> switch (tool) {
 			case GetCustomerOrdersTool.NAME -> java.util.stream.Stream.of("GET_CUSTOMER_ORDERS");
-			case InvestigateDeliveryTool.NAME -> java.util.stream.Stream.of(
-					"GET_CUSTOMER_ORDERS", "GET_DELIVERY_STATUS");
 			case GetRefundPolicyTool.NAME -> java.util.stream.Stream.of("GET_REFUND_POLICY");
 			case GetExchangePolicyTool.NAME -> java.util.stream.Stream.of("GET_EXCHANGE_POLICY");
 			default -> throw new IllegalArgumentException("Unexpected tool " + tool);
-		}).toList();
+		}).forEach(operation -> {
+			operations.add(operation);
+			if (expectsDeliveryDelegation && "GET_CUSTOMER_ORDERS".equals(operation)) {
+				operations.add("INVOKE_DELIVERY_AGENT");
+			}
+		});
+		return List.copyOf(operations);
 	}
 
 	@TestConfiguration(proxyBeanMethods = false)

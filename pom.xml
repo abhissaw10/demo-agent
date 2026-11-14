@@ -115,6 +115,21 @@
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<mainClass>com.example.demo_agent.DemoAgentApplication</mainClass>
+				</configuration>
+				<executions>
+					<execution>
+						<id>repackage-delivery-application</id>
+						<goals>
+							<goal>repackage</goal>
+						</goals>
+						<configuration>
+							<classifier>delivery</classifier>
+							<mainClass>com.example.demo_agent.deliveryapp.DeliveryAgentApplication</mainClass>
+						</configuration>
+					</execution>
+				</executions>
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -149,6 +164,20 @@
 								</path>
 							</annotationProcessorPaths>
 						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>com.vaadin</groupId>
+				<artifactId>vaadin-maven-plugin</artifactId>
+				<version>${vaadin.version}</version>
+				<extensions>true</extensions>
+				<executions>
+					<execution>
+						<id>build-frontend</id>
+						<goals>
+							<goal>build-frontend</goal>
+						</goals>
 					</execution>
 				</executions>
 			</plugin>

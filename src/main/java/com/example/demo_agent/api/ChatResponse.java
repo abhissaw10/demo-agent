@@ -1,6 +1,6 @@
 package com.example.demo_agent.api;
 
-import com.example.demo_agent.agent.AgentDecision;
+import com.example.demo_agent.agent.support.AgentDecision;
 
 import java.util.List;
 

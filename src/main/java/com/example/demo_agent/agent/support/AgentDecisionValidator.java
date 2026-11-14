@@ -1,8 +1,11 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
+
+import com.example.demo_agent.agent.DecisionValidationException;
+import com.example.demo_agent.agent.ExecutedToolCall;
 
 import com.example.demo_agent.api.CustomerOrderResponse;
+import com.example.demo_agent.agent.delivery.DeliveryInvestigationResult;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -34,6 +37,11 @@ public class AgentDecisionValidator {
 
 	public AgentDecision parseAndValidate(String json, String currentMessage, List<ConversationTurn> history,
 			List<ExecutedToolCall> evidence) {
+		return parseAndValidate(json, currentMessage, history, evidence, null);
+	}
+
+	public AgentDecision parseAndValidate(String json, String currentMessage, List<ConversationTurn> history,
+			List<ExecutedToolCall> evidence, DeliveryInvestigationResult deliveryInvestigation) {
 		if (json == null || json.isBlank()) {
 			throw new DecisionValidationException("No structured decision was provided.");
 		}
@@ -46,12 +54,17 @@ public class AgentDecisionValidator {
 		validateShape(decision, currentMessage, history);
 		validateFollowUpStyle(decision, history);
 
+		List<ExecutedToolCall> allEvidence = new ArrayList<>();
+		history.stream().flatMap(turn -> turn.verifiedEvidence().stream()).forEach(allEvidence::add);
+		allEvidence.addAll(evidence);
+		validateDoesNotRequestKnownOrderDate(decision, currentMessage, history, allEvidence);
+
 		Set<String> successfulTools = new HashSet<>();
 		Set<String> ownedOrders = new HashSet<>();
 		boolean customerOrdersChecked = false;
 		boolean noOrders = false;
 		boolean onlyDeliveredOrders = false;
-		for (ExecutedToolCall call : evidence) {
+		for (ExecutedToolCall call : allEvidence) {
 			if (GetCustomerOrdersTool.NAME.equals(call.name())) {
 				customerOrdersChecked = true;
 				if (call.success() && call.output() instanceof List<?> values) {
@@ -88,9 +101,23 @@ public class AgentDecisionValidator {
 			throw new DecisionValidationException("An exchange answer requires verified exchange policy evidence.");
 		}
 		boolean deliveryIntent = mentions(lower, "delivery", "delivered", "tracking", "where is", "status");
-		if (deliveryIntent && "ANSWERED".equals(decision.outcome())
-				&& !successfulTools.contains(InvestigateDeliveryTool.NAME) && !noOrders) {
-			throw new DecisionValidationException("A delivery answer requires a Delivery Investigator finding.");
+		boolean deliveryRequired = toolPathPolicy.expectedPath(currentMessage, history)
+				.map(DeterministicToolPathPolicy.ExpectedToolPath::useCase)
+				.filter(useCase -> Set.of("DELIVERY_STATUS", "REFUND_ELIGIBILITY",
+						"EXCHANGE_ELIGIBILITY", "CONTEXTUAL_REFUND_ELIGIBILITY",
+						"CONTEXTUAL_EXCHANGE_ELIGIBILITY").contains(useCase))
+				.isPresent();
+		boolean deliveredPolicyShortcut = onlyDeliveredOrders
+				&& mentions(lower, "refund", "money back", "exchange", "replace", "replacement");
+		if ((deliveryIntent || deliveryRequired) && "ANSWERED".equals(decision.outcome())
+				&& deliveryInvestigation == null && !noOrders && !deliveredPolicyShortcut) {
+			throw new DecisionValidationException(
+					"This answer requires a structured result from the Delivery Agent HTTP endpoint.");
+		}
+		if (deliveryInvestigation != null && decision.orderId() != null
+				&& !decision.orderId().equals(deliveryInvestigation.orderId())) {
+			throw new DecisionValidationException(
+					"The response orderId does not match the Delivery Agent result.");
 		}
 		if (decision.orderId() != null && !ownedOrders.isEmpty() && !ownedOrders.contains(decision.orderId())) {
 			throw new DecisionValidationException("The proposed order is not in the verified owned-order set.");
@@ -100,6 +127,49 @@ public class AgentDecisionValidator {
 			throw new DecisionValidationException("Multiple orders match and no order was identified; clarification is required.");
 		}
 		return decision;
+	}
+
+	private void validateDoesNotRequestKnownOrderDate(AgentDecision decision, String currentMessage,
+			List<ConversationTurn> history, List<ExecutedToolCall> evidence) {
+		String proposedMessage = decision.message().toLowerCase(Locale.ROOT);
+		boolean asksForPlacedDate = mentions(proposedMessage, "when did", "when you placed",
+				"when was", "order date", "placed date", "purchase date")
+				&& mentions(proposedMessage, "order", "placed", "purchased");
+		if (!asksForPlacedDate) {
+			return;
+		}
+		Set<String> referencedOrders = referencedOrderIds(currentMessage, history);
+		boolean dateIsKnown = evidence.stream()
+				.filter(ExecutedToolCall::success)
+				.filter(call -> GetCustomerOrdersTool.NAME.equals(call.name()))
+				.map(ExecutedToolCall::output)
+				.filter(List.class::isInstance)
+				.map(value -> (List<?>) value)
+				.flatMap(List::stream)
+				.filter(CustomerOrderResponse.class::isInstance)
+				.map(CustomerOrderResponse.class::cast)
+				.anyMatch(order -> order.orderStartDate() != null
+						&& (referencedOrders.isEmpty() || referencedOrders.contains(order.orderId())));
+		if (dateIsKnown) {
+			throw new DecisionValidationException(
+					"The order placement date is already present in verified order data; use it instead of asking the customer.");
+		}
+	}
+
+	private Set<String> referencedOrderIds(String currentMessage, List<ConversationTurn> history) {
+		Set<String> orderIds = new HashSet<>();
+		Matcher current = ORDER_ID.matcher(currentMessage);
+		while (current.find()) {
+			orderIds.add(current.group().toUpperCase(Locale.ROOT));
+		}
+		for (int index = history.size() - 1; index >= 0 && orderIds.isEmpty(); index--) {
+			ConversationTurn turn = history.get(index);
+			Matcher prior = ORDER_ID.matcher(turn.userMessage() + " " + turn.assistantMessage());
+			while (prior.find()) {
+				orderIds.add(prior.group().toUpperCase(Locale.ROOT));
+			}
+		}
+		return orderIds;
 	}
 
 	private void validateFollowUpStyle(AgentDecision decision, List<ConversationTurn> history) {

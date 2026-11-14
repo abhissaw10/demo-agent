@@ -1,9 +1,12 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
+
+import com.example.demo_agent.agent.DecisionValidationException;
+import com.example.demo_agent.agent.ExecutedToolCall;
+import com.example.demo_agent.agent.RequestedToolCall;
 
 import com.example.demo_agent.api.CustomerOrderResponse;
 import com.example.demo_agent.api.OrderStatusResponse;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetExchangePolicyTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import org.junit.jupiter.api.Test;
@@ -26,19 +29,19 @@ class DeterministicToolPathPolicyTest {
 
 	@Test
 	void identifiedDeliveryUsesOwnershipThenDeliveryStatus() {
-		assertPath("Where is ORD-1001?", GetCustomerOrdersTool.NAME, InvestigateDeliveryTool.NAME);
+		assertPath("Where is ORD-1001?", GetCustomerOrdersTool.NAME);
 	}
 
 	@Test
 	void identifiedRefundUsesOwnershipDeliveryStatusThenRefundPolicy() {
 		assertPath("Can I cancel ORD-1002 and get a refund?", GetCustomerOrdersTool.NAME,
-				InvestigateDeliveryTool.NAME, GetRefundPolicyTool.NAME);
+				GetRefundPolicyTool.NAME);
 	}
 
 	@Test
 	void identifiedExchangeUsesOwnershipDeliveryStatusThenExchangePolicy() {
 		assertPath("Can I exchange ORD-1001?", GetCustomerOrdersTool.NAME,
-				InvestigateDeliveryTool.NAME, GetExchangePolicyTool.NAME);
+				GetExchangePolicyTool.NAME);
 	}
 
 	@Test
@@ -81,58 +84,21 @@ class DeterministicToolPathPolicyTest {
 
 	@Test
 	void rejectsAToolCallThatIsOutOfOrder() {
-		RequestedToolCall delivery = new RequestedToolCall("call-1", InvestigateDeliveryTool.NAME,
-				"{\"orderId\":\"ORD-1001\"}");
+		RequestedToolCall refund = new RequestedToolCall("call-1", GetRefundPolicyTool.NAME, "{}");
 
-		assertThatThrownBy(() -> policy.validateProposed("Where is ORD-1001?", List.of(), List.of(delivery)))
+		assertThatThrownBy(() -> policy.validateProposed(
+				"Can I refund ORD-1001?", List.of(), List.of(refund)))
 				.isInstanceOf(DecisionValidationException.class)
-				.hasMessageContaining("get_customer_orders")
-				.hasMessageContaining("investigate_delivery");
+				.hasMessageContaining("get_customer_orders");
 	}
 
 	@Test
-	void rejectsAMalformedDeliveryOrderIdBeforeCallingTheOrderApi() {
-		LocalDateTime timestamp = LocalDateTime.of(2026, 11, 12, 20, 0);
-		CustomerOrderResponse owned = new CustomerOrderResponse("CUST-1002", "ORD-1003", timestamp,
-				new OrderStatusResponse("IN_TRANSIT", "In transit", "test", timestamp, false));
-		ExecutedToolCall ownership = new ExecutedToolCall("call-orders", GetCustomerOrdersTool.NAME,
-				List.of(owned), true, null);
-		RequestedToolCall malformed = new RequestedToolCall("call-delivery", InvestigateDeliveryTool.NAME,
-				"{\"orderId\":\"ORD-ORD-1003\",\"investigationType\":\"CURRENT_STATUS\"}");
+	void deliveryToolPathCompletesAfterOwnershipBecauseDelegationIsNotATool() {
+		ExecutedToolCall ownership = new ExecutedToolCall(
+				"call-1", GetCustomerOrdersTool.NAME, List.of(), true, null);
 
-		assertThatThrownBy(() -> policy.validateProposed("Where is ORD-1003?", List.of(ownership),
-				List.of(malformed)))
-				.isInstanceOf(DecisionValidationException.class)
-				.hasMessageContaining("exact orderId")
-				.hasMessageContaining("ORD-1003")
-				.hasMessageContaining("ORD-ORD-1003");
-	}
-
-	@Test
-	void acceptsTheExactOwnedDeliveryOrderId() {
-		LocalDateTime timestamp = LocalDateTime.of(2026, 11, 12, 20, 0);
-		CustomerOrderResponse owned = new CustomerOrderResponse("CUST-1002", "ORD-1003", timestamp,
-				new OrderStatusResponse("IN_TRANSIT", "In transit", "test", timestamp, false));
-		ExecutedToolCall ownership = new ExecutedToolCall("call-orders", GetCustomerOrdersTool.NAME,
-				List.of(owned), true, null);
-		RequestedToolCall delivery = new RequestedToolCall("call-delivery", InvestigateDeliveryTool.NAME,
-				"{\"orderId\":\"ORD-1003\",\"investigationType\":\"CURRENT_STATUS\"}");
-
-		assertThatCode(() -> policy.validateProposed("Where is ORD-1003?", List.of(ownership),
-				List.of(delivery))).doesNotThrowAnyException();
-	}
-
-	@Test
-	void rejectsAFinalDecisionBeforeTheRequiredPathCompletes() {
-		LocalDateTime timestamp = LocalDateTime.of(2026, 11, 8, 12, 0);
-		CustomerOrderResponse unfulfilled = new CustomerOrderResponse("CUST-1001", "ORD-1001", timestamp,
-				new OrderStatusResponse("OUT_FOR_DELIVERY", "Out for delivery", "test", timestamp, false));
-		ExecutedToolCall ownership = new ExecutedToolCall("call-1", GetCustomerOrdersTool.NAME,
-				List.of(unfulfilled), true, null);
-
-		assertThatThrownBy(() -> policy.validateComplete("Where is ORD-1001?", List.of(ownership)))
-				.isInstanceOf(DecisionValidationException.class)
-				.hasMessageContaining("must complete");
+		assertThatCode(() -> policy.validateComplete("Where is ORD-1001?", List.of(ownership)))
+				.doesNotThrowAnyException();
 	}
 
 	@Test
@@ -156,7 +122,6 @@ class DeterministicToolPathPolicyTest {
 	private List<ConversationTurn> verifiedDeliveryHistory() {
 		return List.of(new ConversationTurn("Where is ORD-1002?",
 				"ORD-1002 is awaiting inventory refresh.", List.of(
-						new ExecutedToolCall("orders", GetCustomerOrdersTool.NAME, "verified", true, null),
-						new ExecutedToolCall("delivery", InvestigateDeliveryTool.NAME, "verified", true, null))));
+						new ExecutedToolCall("orders", GetCustomerOrdersTool.NAME, "verified", true, null))));
 	}
 }

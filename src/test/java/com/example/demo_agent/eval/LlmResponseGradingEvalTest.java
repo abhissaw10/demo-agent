@@ -46,6 +46,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 				"server.port=${LIVE_EVAL_PORT:18080}",
 				"support.order-api.base-url=http://localhost:${LIVE_EVAL_PORT:18080}",
 				"support.chat-api.base-url=http://localhost:${LIVE_EVAL_PORT:18080}",
+				"support.delivery-agent-api.base-url=http://localhost:${LIVE_DELIVERY_EVAL_PORT:18081}",
 				"support.agent.max-iterations=4",
 				"support.llm.max-retries=0",
 				"spring.datasource.url=jdbc:sqlite:${java.io.tmpdir}/demo-agent-response-eval.db"
@@ -135,9 +136,11 @@ class LlmResponseGradingEvalTest {
 
 	private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 	private final List<CaseResult> results = new ArrayList<>();
+	private LiveDeliveryAgentServer deliveryAgentServer;
 
 	@BeforeAll
 	void initializeReport() throws IOException {
+		deliveryAgentServer = LiveDeliveryAgentServer.start();
 		results.clear();
 		writeReport();
 	}
@@ -151,7 +154,13 @@ class LlmResponseGradingEvalTest {
 
 	@AfterAll
 	void finalizeReport() throws IOException {
-		writeReport();
+		try {
+			writeReport();
+		} finally {
+			if (deliveryAgentServer != null) {
+				deliveryAgentServer.close();
+			}
+		}
 	}
 
 	private void runAndRecord(GradingCase testCase) throws Throwable {

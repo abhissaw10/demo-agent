@@ -1,9 +1,13 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
+
+import com.example.demo_agent.agent.ExecutedToolCall;
+import com.example.demo_agent.agent.DecisionValidationException;
 
 import com.example.demo_agent.api.CustomerOrderResponse;
 import com.example.demo_agent.api.OrderStatusResponse;
+import com.example.demo_agent.agent.delivery.DeliveryInvestigationOutcome;
+import com.example.demo_agent.agent.delivery.DeliveryInvestigationResult;
 import com.example.demo_agent.tool.GetCustomerOrdersTool;
-import com.example.demo_agent.tool.InvestigateDeliveryTool;
 import com.example.demo_agent.tool.GetRefundPolicyTool;
 import org.junit.jupiter.api.Test;
 
@@ -26,8 +30,9 @@ class AgentDecisionValidatorTest {
 				new CustomerOrderResponse("CUST-1001", "ORD-1001", date, status),
 				new CustomerOrderResponse("CUST-1001", "ORD-1002", date.plusDays(1), status));
 		ExecutedToolCall evidence = new ExecutedToolCall("call-1", GetCustomerOrdersTool.NAME, orders, true, null);
-		ExecutedToolCall delivery = new ExecutedToolCall("call-2", InvestigateDeliveryTool.NAME,
-				"verified investigator result", true, null);
+		DeliveryInvestigationResult delivery = new DeliveryInvestigationResult(
+				DeliveryInvestigationOutcome.COMPLETED, "ORD-1001", "IN_TRANSIT",
+				"The order is in transit.", List.of());
 		String decision = """
 				{"message":"ORD-1001 is being prepared.","outcome":"ANSWERED",
 				"resolvedIntents":["delivery"],"orderId":"ORD-1001","evidence":["Order exists."],
@@ -35,7 +40,7 @@ class AgentDecisionValidatorTest {
 				""";
 
 		assertThatThrownBy(() -> validator.parseAndValidate(decision, "Where is my delivery?", List.of(),
-				List.of(evidence, delivery)))
+				List.of(evidence), delivery))
 				.isInstanceOf(DecisionValidationException.class)
 				.hasMessageContaining("Multiple orders match");
 	}
@@ -58,6 +63,29 @@ class AgentDecisionValidatorTest {
 				history, List.of(refundPolicy));
 
 		assertThat(result.message()).startsWith("No.").hasSizeLessThan(150);
+	}
+
+	@Test
+	void rejectsARequestForAnOrderDateAlreadyPresentInVerifiedHistory() {
+		LocalDateTime placedAt = LocalDateTime.of(2026, 10, 18, 8, 0);
+		CustomerOrderResponse order = new CustomerOrderResponse("CUST-1003", "ORD-1005", placedAt,
+				new OrderStatusResponse("LOST_IN_TRANSIT", "Lost in transit",
+						"The carrier declared the shipment lost.", placedAt.plusDays(3), true));
+		List<ConversationTurn> history = List.of(new ConversationTurn(
+				"What is the status of ORD-1005?", "ORD-1005 is lost in transit.", List.of(
+						new ExecutedToolCall("orders", GetCustomerOrdersTool.NAME,
+								List.of(order), true, null))));
+		String decision = """
+				{"message":"Could you let me know when you placed the order?",
+				"outcome":"CLARIFICATION_REQUIRED","resolvedIntents":["refund eligibility"],
+				"orderId":"ORD-1005","evidence":[],"recommendations":[],
+				"actionsRequiringApproval":[]}
+				""";
+
+		assertThatThrownBy(() -> validator.parseAndValidate(decision,
+				"Cancel the order and issue me a refund", history, List.of()))
+				.isInstanceOf(DecisionValidationException.class)
+				.hasMessageContaining("placement date is already present");
 	}
 
 	@Test
@@ -143,9 +171,7 @@ class AgentDecisionValidatorTest {
 		List<ConversationTurn> history = List.of(new ConversationTurn(
 				"Where is ORD-1002?", "ORD-1002 is awaiting inventory refresh.", List.of(
 						new ExecutedToolCall("orders", GetCustomerOrdersTool.NAME,
-								"verified ownership", true, null),
-						new ExecutedToolCall("delivery", InvestigateDeliveryTool.NAME,
-								"verified delivery", true, null))));
+								"verified ownership", true, null))));
 
 		AgentDecision result = validator.parseAndValidate(decision,
 				"Which order did we just discuss?", history, List.of());

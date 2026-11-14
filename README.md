@@ -1,9 +1,10 @@
 # Order Support and Delivery Agents
 
-This Spring Boot application now includes the Stage 1 order APIs plus a bounded, read-only support
-agent and a Vaadin chat UI. The model can request tools, but only application code validates and
-executes them. No refund, cancellation, exchange, replacement, inventory reservation, or payment
-operation is exposed.
+This codebase builds two independently deployable Spring Boot applications. The Support application
+runs the Stage 1 order APIs, bounded Support Agent, and Vaadin UI on port `8080`. The Delivery
+application exposes its own bounded Delivery Agent on port `8081`. Models can request only validated,
+read-only tools; neither application exposes refund, cancellation, exchange, replacement, inventory
+reservation, or payment operations.
 
 ## Requirements
 
@@ -13,11 +14,22 @@ operation is exposed.
 
 ## Configure and run
 
-The recommended setup keeps the key out of source control:
+Build both executable applications while keeping the model key out of source control:
 
 ```bash
-GROQ_API_KEY=your-key ./mvnw spring-boot:run
+./mvnw clean package
 ```
+
+Start the Support application and Delivery application in separate processes:
+
+```bash
+GROQ_API_KEY=your-key java -jar target/demo-agent-0.0.1-SNAPSHOT.jar
+GROQ_API_KEY=your-key java -jar target/demo-agent-0.0.1-SNAPSHOT-delivery.jar
+```
+
+The Support application stays on `8080`. The Delivery executable activates the `delivery` profile
+and defaults to `8081`; override it with `DELIVERY_AGENT_PORT`. Support calls it through
+`DELIVERY_AGENT_API_BASE_URL`, which defaults to `http://localhost:8081`.
 
 You can instead set `support.llm.api-key` in `application.properties`. The defaults use Groq's
 OpenAI-compatible Responses endpoint and `openai/gpt-oss-20b`:
@@ -46,7 +58,8 @@ RUN_LIVE_EVALS=true GROQ_API_KEY=your-key ./mvnw \
   -Dtest=LiveLlmToolPathEvalTest test
 ```
 
-Set `LIVE_EVAL_PORT` if port `18080` is unavailable. The ten live evals assert tool order,
+Set `LIVE_EVAL_PORT` and `LIVE_DELIVERY_EVAL_PORT` if ports `18080` and `18081` are unavailable.
+The live harness starts both applications. The ten live evals assert tool order,
 forbidden tools, exact LLM/tool counts, duplicate calls, context reuse, and trace/span/session
 correlation. A separate evaluator-LLM suite grades ten representative customer-facing answers for
 correctness, grounding in tool evidence, helpfulness, and unsupported action claims:
@@ -106,6 +119,7 @@ the stored data must follow the organization’s retention and redaction require
 | Method | Path | Response |
 |---|---|---|
 | `POST` | `/chat` | Validated `ChatResponse` with answer, outcome, evidence, recommendations, approval-required actions, and call counts |
+| `POST` | `http://localhost:8081/delivery/investigations` | `DeliveryInvestigationResult` containing structured delivery facts for one `DeliveryInvestigationRequest` |
 | `GET` | `/customers/{customerId}/orders` | Customer orders and latest overall status |
 | `GET` | `/orders/{orderId}/delivery-status` | Chronological delivery history and current status |
 | `GET` | `/policies/refund` | Refund policy as Markdown |
@@ -123,16 +137,15 @@ curl -s http://localhost:8080/chat \
 
 The session header scopes bounded in-memory conversation history by session and customer. If it is
 omitted, the service generates one and returns it in `X-Session-Id`. The default keeps the six most
-recent accepted turns and is cleared when the application restarts. Accepted turns retain their
-verified tool evidence in memory, allowing deterministic follow-ups to reuse ownership and delivery
-facts instead of calling those tools again.
+recent accepted turns and is cleared when the application restarts. Accepted turns retain verified
+Support-tool evidence in memory, allowing deterministic follow-ups to reuse ownership and policy
+facts. Delivery findings are supplied by application orchestration and are not Support tool calls.
 
 ## Agent safety and orchestration
 
-The Support Agent allow-list contains exactly these read-only tools:
+The Support Agent allow-list contains exactly these three read-only tools:
 
 - `get_customer_orders` → `GetCustomerOrdersTool.java`
-- `investigate_delivery` → `InvestigateDeliveryTool.java` (agent-to-agent adapter)
 - `get_refund_policy` → `GetRefundPolicyTool.java`
 - `get_exchange_policy` → `GetExchangePolicyTool.java`
 
@@ -140,15 +153,17 @@ The model also receives a control-plane `submit_agent_decision` function. Its ar
 proposed final response and are passed to `AgentDecisionValidator`; it is never sent to the business
 tool executor, does not perform an action, and does not count as a tool call.
 
-`DeliveryAgent` is the in-process agent-to-agent contract. `DeliveryAgentService` owns a separate,
-bounded LLM iteration loop, a delivery-specific prompt, order-ownership revalidation, and private
-delivery resource tools. Its model must call `resolve_delivery_order`, then
+`DeliveryInvestigationRequest` and `DeliveryInvestigationResult` remain the agent-to-agent contract.
+After `get_customer_orders` establishes the target order, Support application orchestration invokes
+`POST /delivery/investigations` directly; the Support model has no Delivery tool or agent function in
+its schema. `DeliveryAgentService` owns a separate, bounded LLM iteration loop, a delivery-specific
+prompt, order-ownership revalidation, and private delivery resource tools. Its model must call
+`resolve_delivery_order`, then
 `get_delivery_status_facts` when access is verified, and finally
 `submit_delivery_investigation`. Application code validates that sequence and reconstructs evidence
-from tool output. The Support Agent can invoke the Delivery Agent only through
-`investigate_delivery`, receives a `DeliveryInvestigationResult` containing structured facts, and
-remains solely responsible for customer-facing wording. This keeps support conversation/model state
-out of the Delivery Agent and raw tracking data out of the Support Agent.
+from tool output. Support receives the structured result as application-provided context and remains
+solely responsible for customer-facing wording. This keeps support conversation/model state out of
+the Delivery Agent and raw tracking data out of the Support Agent.
 
 The Delivery Agent loop has its own budgets and reuses the configured OpenAI-compatible connection:
 
@@ -158,15 +173,15 @@ delivery.agent.max-tool-calls=2
 delivery.agent.max-validation-retries=2
 ```
 
-The agent boundary preserves the caller's `sessionId` and `traceId`. The active
-`investigate_delivery` tool span becomes the Delivery Agent run's `parentSpanId`, while the Delivery
-Agent creates its own run ID and root span. Its LLM, private tools, and downstream order API calls
-then create child spans under that run. Each event includes `agentVersion`, so one trace can be
-grouped into Support Agent and Delivery Agent call counts without confusing their iterations:
+The HTTP boundary preserves the caller's `sessionId`, `traceId`, parent run ID, and span lineage.
+Support records the outbound request as `INVOKE_DELIVERY_AGENT`; that resource span becomes the
+Delivery Agent run's `parentSpanId`. The Delivery Agent then creates its own run ID and root span,
+with child spans for its LLM, private tools, and downstream order API calls. Each event includes
+`agentVersion`, so distributed logs can be grouped into Support and Delivery call counts:
 
 ```text
-Support run → Support LLM → investigate_delivery
-                              └─ Delivery run → Delivery LLM → Delivery tool → Order API
+Support run → Support LLM → ownership tool → application HTTP orchestration :8081
+                                                    └─ Delivery run → Delivery LLM → Delivery tool → Order API :8080
 ```
 
 The loop is bounded by these properties:
@@ -186,14 +201,17 @@ support.chat-api.read-timeout=30s
 ```
 
 It validates tool names and arguments, detects repeated identical validation failures, executes
-only genuinely independent non-delivery calls in parallel, validates the final JSON decision,
+genuinely independent calls in parallel, validates the final JSON decision,
 prevents silent order selection when multiple orders match, and fails safely on model, downstream,
 or rate-limit errors. Follow-up answers are limited to 50 words and rejected for repeated eight-word
 sequences from prior assistant messages, so validation can ask the model for a concise correction.
 OpenAI SDK retries are deliberately capped by `support.llm.max-retries`.
 
 Set `ORDER_API_BASE_URL` if the Stage 1 APIs run in a separate service. Set `CHAT_API_BASE_URL` only
-when the Vaadin UI should call a separately hosted `/chat` API.
+when the Vaadin UI should call a separately hosted `/chat` API. Set `DELIVERY_AGENT_API_BASE_URL`
+when Support should call a Delivery deployment other than `http://localhost:8081`. Connection,
+timeout, HTTP, malformed JSON, missing-field, and order-mismatch failures are converted into a typed
+`TEMPORARILY_UNAVAILABLE` result rather than leaking transport errors into the Support Agent loop.
 
 ## Seed data
 
@@ -207,19 +225,20 @@ exchange path evals. `CUST-404` has no orders.
 
 ## Eval event bus and event contract
 
-`LoggingAgentEventPublisher` publishes typed events through Spring's in-process
-`ApplicationEventPublisher`. Production listeners can subscribe without coupling the agent loop to
-the consumer. The live eval harness subscribes to the same events and places them in a bounded JDK
-`LinkedBlockingQueue`; this keeps tests deterministic and requires no external broker.
+Each application publishes typed events through its own Spring in-process
+`ApplicationEventPublisher`. Production listeners can subscribe without coupling either agent loop
+to the consumer. Correlation IDs preserve the distributed trace across processes; production logs
+or exported telemetry can therefore join Support and Delivery events. The live eval harness uses a
+bounded JDK `LinkedBlockingQueue` for deterministic Support-side assertions.
 
 | Event | Trigger | Important attribute values |
 |---|---|---|
 | `AgentRunStartedEvent` | Immediately before a chat run starts | `runId` is a new UUID; `sessionId` comes from the request; `traceId` and root `spanId` come from MDC/HTTP correlation headers |
-| `DelegatedAgentRunStartedEvent` | Immediately after `investigate_delivery` crosses the agent boundary | The Delivery Agent gets a new `runId` and root span, inherits `sessionId`/`traceId`, and records the Support Agent run and tool span as `parentRunId`/`parentSpanId` |
+| `DelegatedAgentRunStartedEvent` | Immediately after the Delivery REST endpoint accepts an investigation | The Delivery Agent gets a new `runId` and root span, inherits `sessionId`/`traceId`, and records the Support Agent run and outbound HTTP span as `parentRunId`/`parentSpanId` |
 | `LlmCallEvent STARTED` | Immediately before each logical `LlmSession.next()` in either agent | New LLM child `spanId`; `parentSpanId` is that agent's run root; agent identity, iteration, logical ordinal, model, and a new `llmCallId` are populated |
 | `LlmCallEvent COMPLETED` | Immediately after that logical call returns or fails | Same IDs as STARTED; `providerCallCount` records actual provider calls including explicit rate-limit retries and structured-output fallback; requested tool names/IDs, success, and error type are populated |
 | `ToolCallEvent STARTED` | After application path validation and immediately before a tool executes in either agent | Every tool gets a unique child `spanId`; `parentSpanId` is that agent's run root; agent identity, originating LLM call/span IDs, tool call ID/name/ordinal, and sanitized arguments are populated |
-| `ResourceCallEvent STARTED` | Immediately before `OrderApiClient` invokes a downstream HTTP resource | New resource child `spanId`; `parentSpanId` is the executing tool span; tool name/ID, HTTP operation, and path template are populated |
+| `ResourceCallEvent STARTED` | Immediately before either application invokes a downstream HTTP resource | New resource child `spanId`. Delivery resource calls use the executing tool span and tool name/ID. Support's direct `INVOKE_DELIVERY_AGENT` call uses the Support run root and has null tool name/ID. |
 | `ResourceCallEvent COMPLETED` | When the downstream resource returns or fails | Same IDs as STARTED; success and downstream error code are populated |
 | `ToolCallEvent COMPLETED` | When tool execution returns or safely maps an error | Same tool span and correlation fields as STARTED; success and error code are populated |
 | `AgentRunCompletedEvent` | After a handled answer or safe failure is returned | Original run context, request/response, completion time, duration, and final LLM/tool counts |
@@ -227,7 +246,6 @@ the consumer. The live eval harness subscribes to the same events and places the
 | `DelegatedAgentRunCompletedEvent` | After the Delivery Agent returns a handled structured result | Original nested run linkage plus the Delivery Agent's own LLM/tool totals, result, completion time, and duration |
 | `DelegatedAgentRunFailedEvent` | When an unhandled exception escapes the Delivery Agent boundary | Original nested run linkage, failure time, duration, exception type, and message |
 
-This in-process bus is the preferred default while the producer and eval consumer run in the same
-Spring service. If events later need durability, replay, or consumption by another process, keep
-`AgentEventPublisher` as the application boundary and add a RabbitMQ or NATS adapter rather than
-changing the agent or tests.
+The in-process bus remains the preferred local application boundary. If events need durability,
+replay, or centralized cross-process consumption, keep `AgentEventPublisher` as the boundary and add
+a RabbitMQ, NATS, or telemetry-export adapter rather than changing either agent or its tests.

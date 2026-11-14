@@ -1,4 +1,4 @@
-package com.example.demo_agent.agent;
+package com.example.demo_agent.agent.support;
 
 import com.example.demo_agent.config.SupportAgentProperties;
 import org.springframework.stereotype.Component;

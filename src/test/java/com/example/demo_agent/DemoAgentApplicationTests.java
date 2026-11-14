@@ -1,10 +1,16 @@
 package com.example.demo_agent;
 
+import com.example.demo_agent.agent.delivery.DeliveryAgent;
+import com.example.demo_agent.agent.support.SupportAgentService;
+import com.example.demo_agent.client.DeliveryAgentApiClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.context.ApplicationContext;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -23,8 +29,14 @@ class DemoAgentApplicationTests {
 	@Autowired
 	private MockMvc mockMvc;
 
+	@Autowired
+	private ApplicationContext context;
+
 	@Test
 	void contextLoads() {
+		assertThat(context.getBeansOfType(SupportAgentService.class)).hasSize(1);
+		assertThat(context.getBeansOfType(DeliveryAgentApiClient.class)).hasSize(1);
+		assertThat(context.getBeansOfType(DeliveryAgent.class)).isEmpty();
 	}
 
 	@Test
